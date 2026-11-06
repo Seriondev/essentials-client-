@@ -2276,6 +2276,8 @@ jobs:
                   public static final List<String> LIBRARY = new ArrayList<>();
                   private static final Map<String, CompletableFuture<Pcm>> LOADING = new HashMap<>();
                   private static final Random RNG = new Random();
+                  /** AL_SAMPLE_OFFSET (OpenAL 1.1), dipakai langsung karena AL10 tidak punya konstanta ini */
+                  private static final int SAMPLE_OFFSET = 0x1025;
                   private static int source = -1;
                   private static int buffer = -1;
                   private static String loaded = null;
@@ -2331,7 +2333,7 @@ jobs:
                       if (source < 0 || loaded == null) {
                           return 0;
                       }
-                      return AL10.alGetSourcei(source, AL10.AL_SAMPLE_OFFSET);
+                      return AL10.alGetSourcei(source, SAMPLE_OFFSET);
                   }
 
                   public static double fraction() {
@@ -2343,7 +2345,7 @@ jobs:
                           return;
                       }
                       int target = (int) Math.max(0, Math.min(frames - 1, f * frames));
-                      AL10.alSourcei(source, AL10.AL_SAMPLE_OFFSET, target);
+                      AL10.alSourcei(source, SAMPLE_OFFSET, target);
                   }
 
                   public static String timeText(int frame) {
