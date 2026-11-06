@@ -167,6 +167,7 @@ jobs:
           import javazoom.jl.decoder.Header;
           import javazoom.jl.decoder.SampleBuffer;
           import net.minecraft.item.ItemStack;
+          import java.util.Random;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -538,6 +539,18 @@ jobs:
               // ------------------------------------------------------------------
               // Config
               // ------------------------------------------------------------------
+              public static final class Playlist {
+                  public String name = "";
+                  public List<String> songs = new ArrayList<>();
+
+                  public Playlist() {
+                  }
+
+                  public Playlist(String name) {
+                      this.name = name;
+                  }
+              }
+
               public static final class Config {
                   public boolean enabled = true;
                   public boolean everyone = false;
@@ -553,7 +566,11 @@ jobs:
                   public String selectedSkin = "";
                   public Map<String, Boolean> skinSlim = new HashMap<>();
                   public List<String> playlist = new ArrayList<>();
+                  public List<Playlist> playlists = new ArrayList<>();
+                  public int activePlaylist = -1;
                   public int musicVolume = 80;
+                  public int musicRepeat = 0;
+                  public boolean musicShuffle = false;
                   public List<String> accounts = new ArrayList<>();
                   public String currentAccount = "";
 
@@ -617,6 +634,19 @@ jobs:
                           playlist = new ArrayList<>();
                       }
                       musicVolume = Math.max(0, Math.min(100, musicVolume));
+                      if (playlists == null) {
+                          playlists = new ArrayList<>();
+                      }
+                      if (playlist != null && !playlist.isEmpty() && playlists.isEmpty()) {
+                          Playlist migrated = new Playlist("Playlist 1");
+                          migrated.songs.addAll(playlist);
+                          playlists.add(migrated);
+                      }
+                      playlist = new ArrayList<>();
+                      if (activePlaylist >= playlists.size()) {
+                          activePlaylist = -1;
+                      }
+                      musicRepeat = Math.max(0, Math.min(2, musicRepeat));
                       if (accounts == null) {
                           accounts = new ArrayList<>();
                       }
@@ -2245,14 +2275,17 @@ jobs:
               public static final class Music {
                   public static final List<String> LIBRARY = new ArrayList<>();
                   private static final Map<String, CompletableFuture<Pcm>> LOADING = new HashMap<>();
+                  private static final Random RNG = new Random();
                   private static int source = -1;
                   private static int buffer = -1;
                   private static String loaded = null;
                   private static String wantPlay = null;
                   private static boolean playing = false;
+                  private static int frames = 0;
+                  private static int rate = 44100;
                   public static String error = "";
 
-                  private record Pcm(ByteBuffer data, int rate, int format) {
+                  private record Pcm(ByteBuffer data, int rate, int format, int frames) {
                   }
 
                   private Music() {
@@ -2290,10 +2323,38 @@ jobs:
                       return playing;
                   }
 
+                  public static int durationFrames() {
+                      return frames;
+                  }
+
+                  public static int positionFrames() {
+                      if (source < 0 || loaded == null) {
+                          return 0;
+                      }
+                      return AL10.alGetSourcei(source, AL10.AL_SAMPLE_OFFSET);
+                  }
+
+                  public static double fraction() {
+                      return frames > 0 ? Math.min(1.0, positionFrames() / (double) frames) : 0.0;
+                  }
+
+                  public static void seekFraction(double f) {
+                      if (source < 0 || loaded == null || frames <= 0) {
+                          return;
+                      }
+                      int target = (int) Math.max(0, Math.min(frames - 1, f * frames));
+                      AL10.alSourcei(source, AL10.AL_SAMPLE_OFFSET, target);
+                  }
+
+                  public static String timeText(int frame) {
+                      int sec = frame / Math.max(1, rate);
+                      return (sec / 60) + ":" + String.format("%02d", sec % 60);
+                  }
+
                   private static Pcm decode(String name) throws Exception {
                       Path p = dir().resolve(name);
                       ByteArrayOutputStream out = new ByteArrayOutputStream();
-                      int rate = 44100;
+                      int rr = 44100;
                       int ch = 2;
                       try (InputStream in = Files.newInputStream(p)) {
                           Bitstream bs = new Bitstream(in);
@@ -2301,7 +2362,7 @@ jobs:
                           Header h;
                           while ((h = bs.readFrame()) != null) {
                               SampleBuffer sb = (SampleBuffer) dec.decodeFrame(h, bs);
-                              rate = sb.getSampleFrequency();
+                              rr = sb.getSampleFrequency();
                               ch = sb.getChannelCount();
                               short[] pcm = sb.getBuffer();
                               int len = sb.getBufferLength();
@@ -2317,7 +2378,8 @@ jobs:
                       ByteBuffer bb = ByteBuffer.allocateDirect(raw.length).order(ByteOrder.nativeOrder());
                       bb.put(raw).flip();
                       int fmt = ch == 1 ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
-                      return new Pcm(bb, rate, fmt);
+                      int fr = raw.length / (ch * 2);
+                      return new Pcm(bb, rr, fmt, fr);
                   }
 
                   private static void ensureSource() {
@@ -2333,6 +2395,15 @@ jobs:
                       }
                   }
 
+                  /** daftar putar aktif: playlist yang dipilih, atau seluruh library */
+                  public static List<String> queue() {
+                      Config c = Config.get();
+                      if (c.activePlaylist >= 0 && c.activePlaylist < c.playlists.size()) {
+                          return c.playlists.get(c.activePlaylist).songs;
+                      }
+                      return LIBRARY;
+                  }
+
                   public static void play(String name) {
                       wantPlay = name;
                       LOADING.computeIfAbsent(name, n -> CompletableFuture.supplyAsync(() -> {
@@ -2346,10 +2417,9 @@ jobs:
 
                   public static void togglePause() {
                       if (loaded == null && wantPlay == null) {
-                          List<String> pl = Config.get().playlist;
-                          String first = !pl.isEmpty() ? pl.get(0) : (!LIBRARY.isEmpty() ? LIBRARY.get(0) : null);
-                          if (first != null) {
-                              play(first);
+                          List<String> q = queue();
+                          if (!q.isEmpty()) {
+                              play(q.get(0));
                           }
                           return;
                       }
@@ -2365,27 +2435,45 @@ jobs:
                       }
                   }
 
-                  private static List<String> order() {
-                      List<String> pl = Config.get().playlist;
-                      return pl.isEmpty() ? LIBRARY : pl;
-                  }
-
-                  public static void next() {
-                      List<String> list = order();
+                  /** wrap = false berarti berhenti di lagu terakhir (untuk mode ulangi mati) */
+                  public static void next(boolean wrap) {
+                      List<String> list = queue();
                       if (list.isEmpty()) {
                           return;
                       }
-                      int idx = loaded == null ? -1 : list.indexOf(loaded);
-                      play(list.get((idx + 1) % list.size()));
+                      int n = list.size();
+                      int idx = list.indexOf(loaded);
+                      if (Config.get().musicShuffle && n > 1) {
+                          int r;
+                          do {
+                              r = RNG.nextInt(n);
+                          } while (r == idx);
+                          play(list.get(r));
+                          return;
+                      }
+                      int ni = idx + 1;
+                      if (ni >= n) {
+                          if (!wrap) {
+                              playing = false;
+                              return;
+                          }
+                          ni = 0;
+                      }
+                      play(list.get(ni));
                   }
 
                   public static void prev() {
-                      List<String> list = order();
+                      List<String> list = queue();
                       if (list.isEmpty()) {
                           return;
                       }
-                      int idx = loaded == null ? 0 : list.indexOf(loaded);
-                      play(list.get((idx - 1 + list.size()) % list.size()));
+                      int n = list.size();
+                      if (Config.get().musicShuffle && n > 1) {
+                          next(true);
+                          return;
+                      }
+                      int idx = list.indexOf(loaded);
+                      play(list.get((idx - 1 + n) % n));
                   }
 
                   public static void tick() {
@@ -2403,6 +2491,8 @@ jobs:
                                   AL10.alBufferData(buffer, pcm.format(), pcm.data(), pcm.rate());
                                   AL10.alSourcei(source, AL10.AL_BUFFER, buffer);
                                   loaded = name;
+                                  frames = pcm.frames();
+                                  rate = pcm.rate();
                                   applyVolume();
                                   AL10.alSourcePlay(source);
                                   playing = true;
@@ -2415,7 +2505,38 @@ jobs:
                       }
                       if (playing && source >= 0 && AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE) == AL10.AL_STOPPED) {
                           playing = false;
-                          next();
+                          int mode = Config.get().musicRepeat;
+                          if (mode == 2) {
+                              play(loaded);
+                          } else {
+                              next(mode == 1);
+                          }
+                      }
+                  }
+              }
+
+              /** slider seek: nilai diikuti posisi lagu, geser = pindah menit */
+              private static final class SeekSlider extends SliderWidget {
+                  private long lastUser = 0L;
+
+                  SeekSlider(int x, int y, int width, int height) {
+                      super(x, y, width, height, Text.empty(), 0.0);
+                  }
+
+                  @Override
+                  protected void updateMessage() {
+                      this.setMessage(Text.empty());
+                  }
+
+                  @Override
+                  protected void applyValue() {
+                      lastUser = System.currentTimeMillis();
+                      Music.seekFraction(this.value);
+                  }
+
+                  void sync() {
+                      if (System.currentTimeMillis() - lastUser > 400) {
+                          this.value = Music.fraction();
                       }
                   }
               }
@@ -2427,8 +2548,11 @@ jobs:
 
                   private final Screen parent;
                   private int tab = 0;
+                  private int openPl = -1;
                   private int pageIdx = 0;
                   private String status = "";
+                  private TextFieldWidget nameField;
+                  private SeekSlider seek;
                   private int px;
                   private int py;
                   private int pw;
@@ -2439,7 +2563,10 @@ jobs:
                   private int listX;
                   private int listY;
                   private int listW;
-                  private int rowsN;
+                  private int seekX;
+                  private int seekY;
+                  private int seekW;
+                  private int transportY;
 
                   public MusicScreen(Screen parent) {
                       super(Text.literal("Music"));
@@ -2453,13 +2580,123 @@ jobs:
                       return b;
                   }
 
+                  private int startY() {
+                      return (tab == 1 && openPl >= 0) ? listY + 26 : listY;
+                  }
+
+                  private int rowsVisible() {
+                      return Math.max(2, (py + ph - 96 - startY()) / 22);
+                  }
+
                   private List<String> entries() {
-                      return tab == 0 ? new ArrayList<>(Music.LIBRARY) : new ArrayList<>(Config.get().playlist);
+                      Config c = Config.get();
+                      if (tab == 0) {
+                          return new ArrayList<>(Music.LIBRARY);
+                      }
+                      if (openPl < 0) {
+                          List<String> names = new ArrayList<>();
+                          for (Playlist p : c.playlists) {
+                              names.add(p.name);
+                          }
+                          return names;
+                      }
+                      return new ArrayList<>(c.playlists.get(openPl).songs);
+                  }
+
+                  private int pageCount() {
+                      int n = entries().size();
+                      return Math.max(1, (n + rowsVisible() - 1) / rowsVisible());
+                  }
+
+                  private void createPlaylist() {
+                      Config c = Config.get();
+                      c.playlists.add(new Playlist("Playlist " + (c.playlists.size() + 1)));
+                      openPl = c.playlists.size() - 1;
+                      Config.save();
+                      pageIdx = 0;
+                      this.clearAndInit();
+                  }
+
+                  private void openPlaylist(int idx) {
+                      openPl = idx;
+                      pageIdx = 0;
+                      this.clearAndInit();
+                  }
+
+                  private void savePlaylistName() {
+                      if (nameField == null || openPl < 0) {
+                          return;
+                      }
+                      String n = nameField.getText().trim();
+                      if (n.isEmpty()) {
+                          status = "Nama playlist tidak boleh kosong";
+                          return;
+                      }
+                      Config.get().playlists.get(openPl).name = n;
+                      Config.save();
+                      status = "Nama tersimpan";
+                  }
+
+                  private void deletePlaylist() {
+                      Config c = Config.get();
+                      if (openPl < 0) {
+                          return;
+                      }
+                      c.playlists.remove(openPl);
+                      if (c.activePlaylist == openPl) {
+                          c.activePlaylist = -1;
+                      } else if (c.activePlaylist > openPl) {
+                          c.activePlaylist--;
+                      }
+                      openPl = -1;
+                      pageIdx = 0;
+                      Config.save();
+                      this.clearAndInit();
+                  }
+
+                  private void playFromLibrary(String name) {
+                      Config.get().activePlaylist = -1;
+                      Config.save();
+                      Music.play(name);
+                  }
+
+                  private void playFromPlaylist(String name) {
+                      Config.get().activePlaylist = openPl;
+                      Config.save();
+                      Music.play(name);
+                  }
+
+                  private void addToOpen(String name) {
+                      if (openPl < 0) {
+                          status = "Buka playlist dulu di tab Playlists";
+                          return;
+                      }
+                      List<String> songs = Config.get().playlists.get(openPl).songs;
+                      if (!songs.contains(name)) {
+                          songs.add(name);
+                          Config.save();
+                          status = "Ditambahkan ke playlist";
+                      } else {
+                          status = "Lagu sudah ada di playlist";
+                      }
+                  }
+
+                  private void removeFromOpen(int idx) {
+                      if (openPl < 0) {
+                          return;
+                      }
+                      Config.get().playlists.get(openPl).songs.remove(idx);
+                      Config.save();
+                      this.clearAndInit();
                   }
 
                   @Override
                   protected void init() {
                       Music.reload();
+                      Config c = Config.get();
+                      if (openPl >= c.playlists.size()) {
+                          openPl = -1;
+                      }
                       int w = this.width;
                       int h = this.height;
                       px = Math.round(w * 0.07f);
@@ -2472,75 +2709,106 @@ jobs:
                       listX = px + sideW + 6;
                       listW = rightX - listX - 8;
                       listY = py + 30;
-                      rowsN = Math.max(3, (ph - 70) / 22);
+                      seekX = px + 12;
+                      seekW = pw - 24;
+                      seekY = py + ph - 86;
+                      transportY = py + ph - 56;
 
-                      invisible(Math.max(4, px - 26), py + 2, 20, 20, this::close);
-                      invisible(px, py + 26, sideW, 20, () -> {
-                          tab = 0;
-                          pageIdx = 0;
-                          this.clearAndInit();
-                      });
-                      invisible(px, py + 48, sideW, 20, () -> {
-                          tab = 1;
-                          pageIdx = 0;
-                          this.clearAndInit();
-                      });
-
-                      int cy = py + ph / 2 - 20;
-                      int cx = rightX + rightW / 2;
-                      invisible(cx - 50, cy, 30, 20, Music::prev);
-                      invisible(cx - 10, cy, 20, 20, Music::togglePause);
-                      invisible(cx + 20, cy, 30, 20, Music::next);
-                      this.addDrawableChild(new RangeSlider(rightX + 10, cy + 30, rightW - 20, 20, "Volume", 0, 100,
-                              Config.get().musicVolume, v -> {
-                                  Config.get().musicVolume = v;
-                                  Music.applyVolume();
-                              }));
-
-                      List<String> list = entries();
-                      int pages = Math.max(1, (list.size() + rowsN - 1) / rowsN);
+                      int pages = pageCount();
                       if (pageIdx >= pages) {
                           pageIdx = pages - 1;
                       }
                       if (pageIdx < 0) {
                           pageIdx = 0;
                       }
-                      for (int i = 0; i < rowsN; i++) {
-                          int idx = pageIdx * rowsN + i;
-                          if (idx >= list.size()) {
-                              break;
-                          }
-                          String name = list.get(idx);
-                          int y = listY + i * 22;
-                          invisible(listX, y, listW - 26, 20, () -> Music.play(name));
-                          if (tab == 0) {
-                              invisible(listX + listW - 22, y, 20, 20, () -> {
-                                  List<String> pl = Config.get().playlist;
-                                  if (!pl.contains(name)) {
-                                      pl.add(name);
-                                      Config.save();
-                                  }
-                                  this.clearAndInit();
-                              });
-                          } else {
-                              invisible(listX + listW - 22, y, 20, 20, () -> {
-                                  Config.get().playlist.remove(name);
-                                  Config.save();
-                                  this.clearAndInit();
-                              });
-                          }
-                      }
-                      int ny = listY + rowsN * 22 + 4;
-                      invisible(listX, ny, 24, 20, () -> {
+
+                      invisible(Math.max(4, px - 26), py + 2, 20, 20, this::close);
+                      invisible(px, py + 26, sideW, 20, () -> {
+                          tab = 0;
+                          openPl = -1;
+                          pageIdx = 0;
+                          this.clearAndInit();
+                      });
+                      invisible(px, py + 48, sideW, 20, () -> {
+                          tab = 1;
+                          openPl = -1;
+                          pageIdx = 0;
+                          this.clearAndInit();
+                      });
+
+                      // navigasi halaman di header
+                      invisible(px + pw - 84, py + 3, 18, 16, () -> {
                           if (pageIdx > 0) {
                               pageIdx--;
                               this.clearAndInit();
                           }
                       });
-                      invisible(listX + listW - 24, ny, 24, 20, () -> {
-                          pageIdx++;
-                          this.clearAndInit();
+                      invisible(px + pw - 22, py + 3, 18, 16, () -> {
+                          if (pageIdx < pageCount() - 1) {
+                              pageIdx++;
+                              this.clearAndInit();
+                          }
                       });
+
+                      // seek bar + transport
+                      seek = new SeekSlider(seekX, seekY, seekW, 12);
+                      this.addDrawableChild(seek);
+                      int cx = px + pw / 2;
+                      invisible(cx - 96, transportY, 40, 20, () -> {
+                          Config.get().musicShuffle = !Config.get().musicShuffle;
+                          Config.save();
+                      });
+                      invisible(cx - 50, transportY, 30, 20, Music::prev);
+                      invisible(cx - 16, transportY, 32, 20, Music::togglePause);
+                      invisible(cx + 20, transportY, 30, 20, () -> Music.next(true));
+                      invisible(cx + 56, transportY, 40, 20, () -> {
+                          Config.get().musicRepeat = (Config.get().musicRepeat + 1) % 3;
+                          Config.save();
+                      });
+
+                      // panel kanan: volume dan playlist baru
+                      this.addDrawableChild(new RangeSlider(rightX + 10, py + 64, rightW - 20, 20, "Volume", 0, 100,
+                              c.musicVolume, v -> {
+                                  Config.get().musicVolume = v;
+                                  Music.applyVolume();
+                              }));
+                      if (tab == 1) {
+                          invisible(rightX + 10, py + 92, rightW - 20, 20, this::createPlaylist);
+                      }
+
+                      // daftar lagu / playlist
+                      if (tab == 1 && openPl >= 0) {
+                          nameField = new TextFieldWidget(this.textRenderer, listX, listY, listW - 124, 20, Text.literal("Nama"));
+                          nameField.setMaxLength(24);
+                          nameField.setText(c.playlists.get(openPl).name);
+                          this.addDrawableChild(nameField);
+                          invisible(listX + listW - 120, listY, 58, 20, this::savePlaylistName);
+                          invisible(listX + listW - 58, listY, 58, 20, this::deletePlaylist);
+                      } else {
+                          nameField = null;
+                      }
+
+                      List<String> list = entries();
+                      int per = rowsVisible();
+                      int start = startY();
+                      for (int i = 0; i < per; i++) {
+                          int idx = pageIdx * per + i;
+                          if (idx >= list.size()) {
+                              break;
+                          }
+                          final int fIdx = idx;
+                          final String name = list.get(idx);
+                          int y = start + i * 22;
+                          if (tab == 0) {
+                              invisible(listX, y, listW - 26, 20, () -> playFromLibrary(name));
+                              invisible(listX + listW - 22, y, 20, 20, () -> addToOpen(name));
+                          } else if (openPl < 0) {
+                              invisible(listX, y, listW, 20, () -> openPlaylist(fIdx));
+                          } else {
+                              invisible(listX, y, listW - 26, 20, () -> playFromPlaylist(name));
+                              invisible(listX + listW - 22, y, 20, 20, () -> removeFromOpen(fIdx));
+                          }
+                      }
                   }
 
                   private void btn(DrawContext c, int x, int y, int w, int h, String label, boolean hover, boolean active, boolean blue) {
@@ -2549,8 +2817,26 @@ jobs:
                       if (active && !blue) {
                           c.fill(x, y + h - 1, x + w, y + h, BLUE_LINE_M);
                       }
-                      int tw = this.textRenderer.getWidth(label);
-                      c.drawTextWithShadow(this.textRenderer, Text.literal(label), x + (w - tw) / 2, y + (h - 8) / 2, 0xFFFFFFFF);
+                      if (!label.isEmpty()) {
+                          int tw = this.textRenderer.getWidth(label);
+                          c.drawTextWithShadow(this.textRenderer, Text.literal(label), x + (w - tw) / 2, y + (h - 8) / 2, 0xFFFFFFFF);
+                      }
+                  }
+
+                  /** ikon ulangi satu lagu: lingkaran dengan angka 1 di tengah */
+                  private void repeatOneIcon(DrawContext c, int x, int y, int w, int h) {
+                      String[] circle = {
+                              "..###..", ".#...#.", "#.....#", "#.....#", "#.....#", "#.....#", ".#...#.", "..###.."};
+                      int ox = x + (w - 7) / 2;
+                      int oy = y + (h - 8) / 2;
+                      for (int r = 0; r < circle.length; r++) {
+                          for (int k = 0; k < circle[r].length(); k++) {
+                              if (circle[r].charAt(k) == '#') {
+                                  c.fill(ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
+                              }
+                          }
+                      }
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("1"), ox + 2, oy, 0xFFFFFFFF);
                   }
 
                   private boolean hov(int mx, int my, int x, int y, int w, int h) {
@@ -2564,57 +2850,102 @@ jobs:
 
                   @Override
                   public void render(DrawContext c, int mx, int my, float delta) {
+                      Config cfg = Config.get();
                       c.fill(0, 0, this.width, this.height, 0xFF101010);
                       c.fill(px, py, px + pw, py + ph, 0xFF1A1A1C);
                       c.fill(px, py, px + pw, py + 22, 0xFF202023);
                       c.fill(px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
                       c.fill(rightX - 1, py + 22, rightX, py + ph, 0xFF2E2E32);
+                      c.fill(px, seekY - 8, px + pw, seekY - 7, 0xFF2E2E32);
+
+                      if (seek != null) {
+                          seek.sync();
+                      }
 
                       super.render(c, mx, my, delta);
 
                       int bx = Math.max(4, px - 26);
                       btn(c, bx, py + 2, 20, 20, "<", hov(mx, my, bx, py + 2, 20, 20), false, false);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("Music"), px + 8, py + 7, 0xFFFFFFFF);
+                      btn(c, px + pw - 84, py + 3, 18, 16, "<", hov(mx, my, px + pw - 84, py + 3, 18, 16), false, false);
+                      btn(c, px + pw - 22, py + 3, 18, 16, ">", hov(mx, my, px + pw - 22, py + 3, 18, 16), false, false);
+                      int pages = pageCount();
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal((pageIdx + 1) + "/" + pages),
+                              px + pw - 57, py + 7, 0xFFAAAAAA);
 
                       btn(c, px + 2, py + 26, sideW - 4, 20, "Library", hov(mx, my, px + 2, py + 26, sideW - 4, 20), tab == 0, false);
-                      btn(c, px + 2, py + 48, sideW - 4, 20, "Playlist", hov(mx, my, px + 2, py + 48, sideW - 4, 20), tab == 1, false);
+                      btn(c, px + 2, py + 48, sideW - 4, 20, "Playlists", hov(mx, my, px + 2, py + 48, sideW - 4, 20), tab == 1, false);
 
+                      // daftar
                       List<String> list = entries();
-                      int per = rowsN;
-                      int pages = Math.max(1, (list.size() + per - 1) / per);
+                      int per = rowsVisible();
+                      int start = startY();
                       String cur = Music.current();
+                      if (tab == 1 && openPl < 0) {
+                          c.drawTextWithShadow(this.textRenderer, Text.literal("Klik playlist untuk membuka"), listX, listY - 10, 0xFF9A9AA0);
+                      }
                       for (int i = 0; i < per; i++) {
                           int idx = pageIdx * per + i;
                           if (idx >= list.size()) {
                               break;
                           }
                           String name = list.get(idx);
-                          int y = listY + i * 22;
-                          boolean isCur = name.equals(cur);
+                          int y = start + i * 22;
+                          boolean isCur = tab == 0 ? name.equals(cur) : (tab == 1 && openPl < 0 ? false : name.equals(cur));
                           c.fill(listX, y, listX + listW, y + 20, isCur ? 0xFF243A57 : 0xFF222226);
-                          String shown = name.length() > 28 ? name.substring(0, 27) + "." : name;
-                          c.drawTextWithShadow(this.textRenderer, Text.literal(shown), listX + 5, y + 6, 0xFFFFFFFF);
-                          int ax = listX + listW - 22;
-                          btn(c, ax, y, 20, 20, tab == 0 ? "+" : "X", hov(mx, my, ax, y, 20, 20), false, false);
+                          if (tab == 1 && openPl < 0) {
+                              int n = cfg.playlists.get(idx).songs.size();
+                              String shown = name.length() > 22 ? name.substring(0, 21) + "." : name;
+                              c.drawTextWithShadow(this.textRenderer, Text.literal(shown), listX + 5, y + 6, 0xFFFFFFFF);
+                              String cnt = n + " lagu";
+                              c.drawTextWithShadow(this.textRenderer, Text.literal(cnt),
+                                      listX + listW - this.textRenderer.getWidth(cnt) - 6, y + 6, 0xFF9A9AA0);
+                          } else {
+                              String shown = name.length() > 28 ? name.substring(0, 27) + "." : name;
+                              c.drawTextWithShadow(this.textRenderer, Text.literal(shown), listX + 5, y + 6, 0xFFFFFFFF);
+                              int ax = listX + listW - 22;
+                              btn(c, ax, y, 20, 20, tab == 0 ? "+" : "X", hov(mx, my, ax, y, 20, 20), false, false);
+                          }
                       }
-                      int ny = listY + per * 22 + 4;
-                      btn(c, listX, ny, 24, 20, "<", hov(mx, my, listX, ny, 24, 20), false, false);
-                      btn(c, listX + listW - 24, ny, 24, 20, ">", hov(mx, my, listX + listW - 24, ny, 24, 20), false, false);
-                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal((pageIdx + 1) + "/" + pages),
-                              listX + listW / 2, ny + 6, 0xFFAAAAAA);
 
+                      if (tab == 1 && openPl >= 0) {
+                          btn(c, listX + listW - 120, listY, 58, 20, "Simpan", hov(mx, my, listX + listW - 120, listY, 58, 20), false, true);
+                          btn(c, listX + listW - 58, listY, 58, 20, "Hapus", hov(mx, my, listX + listW - 58, listY, 58, 20), false, false);
+                      }
+
+                      // panel kanan
                       c.drawTextWithShadow(this.textRenderer, Text.literal("Sedang diputar"), rightX + 10, py + 34, 0xFF9A9AA0);
                       String np = cur == null ? "-" : cur;
                       if (np.length() > 22) {
                           np = np.substring(0, 21) + ".";
                       }
                       c.drawTextWithShadow(this.textRenderer, Text.literal(np), rightX + 10, py + 46, 0xFFFFFFFF);
+                      if (tab == 1) {
+                          btn(c, rightX + 10, py + 92, rightW - 20, 20, "+ Playlist baru", hov(mx, my, rightX + 10, py + 92, rightW - 20, 20), false, true);
+                      }
 
-                      int cy = py + ph / 2 - 20;
-                      int cx = rightX + rightW / 2;
-                      btn(c, cx - 50, cy, 30, 20, "<<", hov(mx, my, cx - 50, cy, 30, 20), false, false);
-                      btn(c, cx - 10, cy, 20, 20, Music.isPlaying() ? "||" : ">", hov(mx, my, cx - 10, cy, 20, 20), false, true);
-                      btn(c, cx + 20, cy, 30, 20, ">>", hov(mx, my, cx + 20, cy, 30, 20), false, false);
+                      // seek bar labels
+                      int total = Music.durationFrames();
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(Music.timeText(Music.positionFrames())),
+                              seekX, seekY + 16, 0xFFAAAAAA);
+                      String dur = Music.timeText(total);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(dur),
+                              seekX + seekW - this.textRenderer.getWidth(dur), seekY + 16, 0xFFAAAAAA);
+
+                      // transport
+                      int cx = px + pw / 2;
+                      btn(c, cx - 96, transportY, 40, 20, "Acak", hov(mx, my, cx - 96, transportY, 40, 20), false, cfg.musicShuffle);
+                      btn(c, cx - 50, transportY, 30, 20, "<<", hov(mx, my, cx - 50, transportY, 30, 20), false, false);
+                      btn(c, cx - 16, transportY, 32, 20, Music.isPlaying() ? "||" : ">", hov(mx, my, cx - 16, transportY, 32, 20), false, true);
+                      btn(c, cx + 20, transportY, 30, 20, ">>", hov(mx, my, cx + 20, transportY, 30, 20), false, false);
+                      int rx = cx + 56;
+                      boolean rHover = hov(mx, my, rx, transportY, 40, 20);
+                      if (cfg.musicRepeat == 2) {
+                          btn(c, rx, transportY, 40, 20, "", rHover, false, true);
+                          repeatOneIcon(c, rx, transportY, 40, 20);
+                      } else {
+                          btn(c, rx, transportY, 40, 20, "R", rHover, false, cfg.musicRepeat == 1);
+                      }
 
                       String line = Music.error.isEmpty() ? status : Music.error;
                       if (list.isEmpty() && tab == 0) {
