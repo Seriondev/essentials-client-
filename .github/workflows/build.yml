@@ -119,7 +119,9 @@ jobs:
               "ModelPartMixin",
               "PlayerEntityModelMixin",
               "ScreenInvoker",
-              "AbstractClientPlayerEntityMixin"
+              "AbstractClientPlayerEntityMixin",
+              "EntityFreelookMixin",
+              "CameraMixin"
             ],
             "injectors": {
               "defaultRequire": 0
@@ -168,6 +170,7 @@ jobs:
           import javazoom.jl.decoder.SampleBuffer;
           import net.minecraft.item.ItemStack;
           import java.util.Random;
+          import net.minecraft.entity.Entity;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -571,6 +574,7 @@ jobs:
                   public int musicVolume = 80;
                   public int musicRepeat = 0;
                   public boolean musicShuffle = false;
+                  public boolean freelookToggle = false;
                   public List<String> accounts = new ArrayList<>();
                   public String currentAccount = "";
 
@@ -1128,8 +1132,15 @@ jobs:
                           this.clearAndInit();
                       }).dimensions(x + 2 * (tw + 4), y + 96, tw, 20).build());
 
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Freelook: " + (c.freelookToggle ? "Toggle" : "Tahan")),
+                              b -> {
+                                  c.freelookToggle = !c.freelookToggle;
+                                  b.setMessage(Text.literal("Freelook: " + (c.freelookToggle ? "Toggle" : "Tahan")));
+                              }).dimensions(x, y + 124, w, 20).build());
+
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Selesai"), b -> this.close())
-                              .dimensions(x, y + 124, w, 20).build());
+                              .dimensions(x, y + 148, w, 20).build());
                   }
 
                   private void initParts() {
@@ -2222,6 +2233,7 @@ jobs:
                   }
 
                   public static void init() {
+                      FreeLook.init();
                       toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                               "key.transparentskin.toggle_sprint",
                               InputUtil.Type.KEYSYM,
@@ -2237,6 +2249,7 @@ jobs:
                   }
 
                   public static void tick(MinecraftClient mc) {
+                      FreeLook.tick(mc);
                       while (toggleKey != null && toggleKey.wasPressed()) {
                           sprintToggled = !sprintToggled;
                       }
@@ -2278,6 +2291,8 @@ jobs:
                   private static final Random RNG = new Random();
                   /** AL_SAMPLE_OFFSET (OpenAL 1.1), dipakai langsung karena AL10 tidak punya konstanta ini */
                   private static final int SAMPLE_OFFSET = 0x1025;
+                  private static final int SOURCE_RELATIVE = 0x202;
+                  private static final int AL_TRUE = 1;
                   private static int source = -1;
                   private static int buffer = -1;
                   private static String loaded = null;
@@ -2355,6 +2370,14 @@ jobs:
 
                   private static Pcm decode(String name) throws Exception {
                       Path p = dir().resolve(name);
+                      byte[] head = new byte[12];
+                      int got;
+                      try (InputStream hin = Files.newInputStream(p)) {
+                          got = hin.read(head);
+                      }
+                      if (got >= 8 && head[4] == 'f' && head[5] == 't' && head[6] == 'y' && head[7] == 'p') {
+                          throw new IllegalStateException("file ini M4A/MP4, bukan MP3 (ganti nama/convert ke MP3)");
+                      }
                       ByteArrayOutputStream out = new ByteArrayOutputStream();
                       int rr = 44100;
                       int ch = 2;
@@ -2377,6 +2400,9 @@ jobs:
                           }
                       }
                       byte[] raw = out.toByteArray();
+                      if (raw.length == 0) {
+                          throw new IllegalStateException("MP3 tidak terbaca (0 audio), coba convert ulang ke MP3 standar");
+                      }
                       ByteBuffer bb = ByteBuffer.allocateDirect(raw.length).order(ByteOrder.nativeOrder());
                       bb.put(raw).flip();
                       int fmt = ch == 1 ? AL10.AL_FORMAT_MONO16 : AL10.AL_FORMAT_STEREO16;
@@ -2388,7 +2414,21 @@ jobs:
                       if (source < 0) {
                           source = AL10.alGenSources();
                           buffer = AL10.alGenBuffers();
+                          AL10.alSourcei(source, SOURCE_RELATIVE, AL_TRUE);
+                          AL10.alSource3f(source, AL10.AL_POSITION, 0f, 0f, 0f);
                       }
+                  }
+
+                  /** info diagnosis untuk layar: state source, gain listener (volume Master Minecraft), dan error OpenAL */
+                  public static String debug() {
+                      if (source < 0) {
+                          return "AL belum aktif";
+                      }
+                      int st = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
+                      float listener = AL10.alGetListenerf(AL10.AL_GAIN);
+                      int err = AL10.alGetError();
+                      String stName = st == AL10.AL_PLAYING ? "main" : st == AL10.AL_PAUSED ? "jeda" : st == AL10.AL_STOPPED ? "berhenti" : "awal";
+                      return "AL " + stName + " | master " + Math.round(listener * 100) + "% | err " + err;
                   }
 
                   public static void applyVolume() {
@@ -2498,7 +2538,11 @@ jobs:
                                   applyVolume();
                                   AL10.alSourcePlay(source);
                                   playing = true;
-                                  error = "";
+                                  int st = AL10.alGetSourcei(source, AL10.AL_SOURCE_STATE);
+                                  if (st != AL10.AL_PLAYING) {
+                                      playing = false;
+                                  }
+                                  error = st == AL10.AL_PLAYING ? "" : "tidak main, " + debug();
                               } catch (Throwable t) {
                                   error = "gagal: " + t.getMessage();
                                   playing = false;
@@ -2938,7 +2982,22 @@ jobs:
                       int cx = px + pw / 2;
                       btn(c, cx - 96, transportY, 40, 20, "Acak", hov(mx, my, cx - 96, transportY, 40, 20), false, cfg.musicShuffle);
                       btn(c, cx - 50, transportY, 30, 20, "<<", hov(mx, my, cx - 50, transportY, 30, 20), false, false);
-                      btn(c, cx - 16, transportY, 32, 20, Music.isPlaying() ? "||" : ">", hov(mx, my, cx - 16, transportY, 32, 20), false, true);
+                      btn(c, cx - 16, transportY, 32, 20, "", hov(mx, my, cx - 16, transportY, 32, 20), false, true);
+                      if (Music.isPlaying()) {
+                          c.fill(cx - 8, transportY + 6, cx - 5, transportY + 14, 0xFFFFFFFF);
+                          c.fill(cx + 1, transportY + 6, cx + 4, transportY + 14, 0xFFFFFFFF);
+                      } else {
+                          String[] tri = {"#...", "##..", "###.", "##..", "#..."};
+                          int ox = cx - 6;
+                          int oy = transportY + 6;
+                          for (int r = 0; r < tri.length; r++) {
+                              for (int k = 0; k < tri[r].length(); k++) {
+                                  if (tri[r].charAt(k) == '#') {
+                                      c.fill(ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
+                                  }
+                              }
+                          }
+                      }
                       btn(c, cx + 20, transportY, 30, 20, ">>", hov(mx, my, cx + 20, transportY, 30, 20), false, false);
                       int rx = cx + 56;
                       boolean rHover = hov(mx, my, rx, transportY, 40, 20);
@@ -2950,6 +3009,9 @@ jobs:
                       }
 
                       String line = Music.error.isEmpty() ? status : Music.error;
+                      if (Music.error.isEmpty() && Music.current() != null) {
+                          line = Music.debug();
+                      }
                       if (list.isEmpty() && tab == 0) {
                           line = "Taruh file .mp3 di config/transparent-skin/music lalu buka lagi";
                       }
@@ -2970,6 +3032,66 @@ jobs:
                       if (this.client != null) {
                           this.client.setScreen(this.parent);
                       }
+                  }
+              }
+
+              // ------------------------------------------------------------------
+              // Freelook: kamera berputar tanpa memutar karakter (tombol di Controls)
+              // ------------------------------------------------------------------
+              public static final class FreeLook {
+                  private static KeyBinding key;
+                  private static boolean active = false;
+                  public static float yaw = 0f;
+                  public static float pitch = 0f;
+
+                  private FreeLook() {
+                  }
+
+                  public static void init() {
+                      key = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+                              "key.transparentskin.freelook",
+                              InputUtil.Type.KEYSYM,
+                              GLFW.GLFW_KEY_LEFT_ALT,
+                              KeyBinding.Category.MISC));
+                  }
+
+                  /** true kalau freelook sedang aktif dan tidak sedang di layar menu */
+                  public static boolean isActive() {
+                      MinecraftClient mc = MinecraftClient.getInstance();
+                      return active && mc.currentScreen == null;
+                  }
+
+                  private static void snap(MinecraftClient mc) {
+                      if (mc.player != null) {
+                          yaw = mc.player.getYaw();
+                          pitch = mc.player.getPitch();
+                      }
+                  }
+
+                  public static void tick(MinecraftClient mc) {
+                      if (key == null) {
+                          return;
+                      }
+                      if (Config.get().freelookToggle) {
+                          while (key.wasPressed()) {
+                              active = !active;
+                              if (active) {
+                                  snap(mc);
+                              }
+                          }
+                      } else {
+                          boolean want = key.isPressed();
+                          if (want && !active) {
+                              snap(mc);
+                          }
+                          active = want;
+                      }
+                  }
+
+                  /** dipanggil dari mixin saat mouse menggerakkan pandangan */
+                  public static void turn(double dx, double dy) {
+                      yaw += (float) dx * 0.15f;
+                      pitch = Math.max(-90f, Math.min(90f, pitch + (float) dy * 0.15f));
                   }
               }
 
@@ -3195,6 +3317,72 @@ jobs:
               }
           }
           TS_EOF_8
+          mkdir -p src/main/java/com/vizkovico/transparentskin/mixin
+          cat > src/main/java/com/vizkovico/transparentskin/mixin/EntityFreelookMixin.java <<'TS_EOF_9'
+          package com.vizkovico.transparentskin.mixin;
+
+          import com.vizkovico.transparentskin.TransparentSkinMod;
+          import net.minecraft.client.MinecraftClient;
+          import net.minecraft.entity.Entity;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+          @Mixin(Entity.class)
+          public abstract class EntityFreelookMixin {
+
+              @Inject(method = "changeLookDirection(DD)V", at = @At("HEAD"), cancellable = true, require = 0)
+              private void ts$freelookTurn(double dx, double dy, CallbackInfo ci) {
+                  try {
+                      MinecraftClient mc = MinecraftClient.getInstance();
+                      if (mc != null && (Object) this == mc.player && TransparentSkinMod.FreeLook.isActive()) {
+                          TransparentSkinMod.FreeLook.turn(dx, dy);
+                          ci.cancel();
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+          }
+          TS_EOF_9
+          mkdir -p src/main/java/com/vizkovico/transparentskin/mixin
+          cat > src/main/java/com/vizkovico/transparentskin/mixin/CameraMixin.java <<'TS_EOF_10'
+          package com.vizkovico.transparentskin.mixin;
+
+          import com.vizkovico.transparentskin.TransparentSkinMod;
+          import net.minecraft.client.MinecraftClient;
+          import net.minecraft.client.render.Camera;
+          import net.minecraft.entity.Entity;
+          import net.minecraft.world.BlockView;
+          import org.spongepowered.asm.mixin.Mixin;
+          import org.spongepowered.asm.mixin.Shadow;
+          import org.spongepowered.asm.mixin.injection.At;
+          import org.spongepowered.asm.mixin.injection.Inject;
+          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+
+          @Mixin(Camera.class)
+          public abstract class CameraMixin {
+
+              @Shadow
+              protected abstract void setRotation(float yaw, float pitch);
+
+              @Inject(
+                      method = "update(Lnet/minecraft/world/BlockView;Lnet/minecraft/entity/Entity;ZZF)V",
+                      at = @At("TAIL"),
+                      require = 0
+              )
+              private void ts$freelookCamera(BlockView area, Entity focused, boolean thirdPerson, boolean inverseView,
+                                             float tickDelta, CallbackInfo ci) {
+                  try {
+                      MinecraftClient mc = MinecraftClient.getInstance();
+                      if (mc != null && focused == mc.player && TransparentSkinMod.FreeLook.isActive()) {
+                          this.setRotation(TransparentSkinMod.FreeLook.yaw, TransparentSkinMod.FreeLook.pitch);
+                      }
+                  } catch (Throwable ignored) {
+                  }
+              }
+          }
+          TS_EOF_10
 
       - name: Build
         run: gradle build --no-daemon
