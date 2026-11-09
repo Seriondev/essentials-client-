@@ -119,9 +119,7 @@ jobs:
               "ModelPartMixin",
               "PlayerEntityModelMixin",
               "ScreenInvoker",
-              "AbstractClientPlayerEntityMixin",
-              "EntityFreelookMixin",
-              "CameraMixin"
+              "AbstractClientPlayerEntityMixin"
             ],
             "injectors": {
               "defaultRequire": 0
@@ -171,6 +169,18 @@ jobs:
           import net.minecraft.item.ItemStack;
           import java.util.Random;
           import net.minecraft.entity.Entity;
+          import java.net.URI;
+          import java.net.URLEncoder;
+          import java.net.http.HttpClient;
+          import java.net.http.HttpRequest;
+          import java.net.http.HttpResponse;
+          import java.nio.file.StandardCopyOption;
+          import java.time.Duration;
+          import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+          import net.minecraft.entity.player.PlayerEntity;
+          import net.minecraft.util.ActionResult;
+          import net.minecraft.text.MutableText;
+          import net.minecraft.util.Formatting;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -280,6 +290,10 @@ jobs:
                           Music.tick();
                       } catch (Throwable ignored) {
                       }
+                      try {
+                          KillStreak.tick(client);
+                      } catch (Throwable ignored) {
+                      }
                       if (openRequested) {
                           openRequested = false;
                           client.setScreen(new ConfigScreen(null));
@@ -287,6 +301,16 @@ jobs:
                   });
 
                   HudExtras.init();
+                  AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
+                      try {
+                          MinecraftClient mc = MinecraftClient.getInstance();
+                          if (player == mc.player && entity instanceof PlayerEntity pe && pe != mc.player) {
+                              KillStreak.onAttack(pe);
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                      return ActionResult.PASS;
+                  });
 
                   // Daftarkan layer cosmetic ke renderer player
                   LivingEntityFeatureRendererRegistrationCallback.EVENT.register((entityType, entityRenderer, registrationHelper, context) -> {
@@ -574,7 +598,10 @@ jobs:
                   public int musicVolume = 80;
                   public int musicRepeat = 0;
                   public boolean musicShuffle = false;
-                  public boolean freelookToggle = false;
+                  public int killStyle = 0;
+                  public int killColor = 0;
+                  public boolean killStreak = true;
+                  public int killSoundVolume = 80;
                   public List<String> accounts = new ArrayList<>();
                   public String currentAccount = "";
 
@@ -651,6 +678,9 @@ jobs:
                           activePlaylist = -1;
                       }
                       musicRepeat = Math.max(0, Math.min(2, musicRepeat));
+                      killStyle = Math.max(0, Math.min(3, killStyle));
+                      killColor = Math.max(0, Math.min(6, killColor));
+                      killSoundVolume = Math.max(0, Math.min(100, killSoundVolume));
                       if (accounts == null) {
                           accounts = new ArrayList<>();
                       }
@@ -1132,12 +1162,8 @@ jobs:
                           this.clearAndInit();
                       }).dimensions(x + 2 * (tw + 4), y + 96, tw, 20).build());
 
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Freelook: " + (c.freelookToggle ? "Toggle" : "Tahan")),
-                              b -> {
-                                  c.freelookToggle = !c.freelookToggle;
-                                  b.setMessage(Text.literal("Freelook: " + (c.freelookToggle ? "Toggle" : "Tahan")));
-                              }).dimensions(x, y + 124, w, 20).build());
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Killstreak >"),
+                              b -> this.client.setScreen(new KillStreakScreen(this))).dimensions(x, y + 124, w, 20).build());
 
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Selesai"), b -> this.close())
                               .dimensions(x, y + 148, w, 20).build());
@@ -2233,7 +2259,6 @@ jobs:
                   }
 
                   public static void init() {
-                      FreeLook.init();
                       toggleKey = KeyBindingHelper.registerKeyBinding(new KeyBinding(
                               "key.transparentskin.toggle_sprint",
                               InputUtil.Type.KEYSYM,
@@ -2249,7 +2274,6 @@ jobs:
                   }
 
                   public static void tick(MinecraftClient mc) {
-                      FreeLook.tick(mc);
                       while (toggleKey != null && toggleKey.wasPressed()) {
                           sprintToggled = !sprintToggled;
                       }
@@ -2368,8 +2392,7 @@ jobs:
                       return (sec / 60) + ":" + String.format("%02d", sec % 60);
                   }
 
-                  private static Pcm decode(String name) throws Exception {
-                      Path p = dir().resolve(name);
+                  private static Pcm decode(Path p) throws Exception {
                       byte[] head = new byte[12];
                       int got;
                       try (InputStream hin = Files.newInputStream(p)) {
@@ -2450,7 +2473,7 @@ jobs:
                       wantPlay = name;
                       LOADING.computeIfAbsent(name, n -> CompletableFuture.supplyAsync(() -> {
                           try {
-                              return decode(n);
+                              return decode(dir().resolve(n));
                           } catch (Exception e) {
                               throw new RuntimeException(e);
                           }
@@ -3036,62 +3059,184 @@ jobs:
               }
 
               // ------------------------------------------------------------------
-              // Freelook: kamera berputar tanpa memutar karakter (tombol di Controls)
+              // Kill streak: suara acak dari config/transparent-skin/killsounds saat membunuh pemain
               // ------------------------------------------------------------------
-              public static final class FreeLook {
-                  private static KeyBinding key;
-                  private static boolean active = false;
-                  public static float yaw = 0f;
-                  public static float pitch = 0f;
+              public static final class KillSound {
+                  private static final Random RNG = new Random();
+                  private static int src = -1;
+                  private static int buf = -1;
 
-                  private FreeLook() {
+                  private KillSound() {
                   }
 
-                  public static void init() {
-                      key = KeyBindingHelper.registerKeyBinding(new KeyBinding(
-                              "key.transparentskin.freelook",
-                              InputUtil.Type.KEYSYM,
-                              GLFW.GLFW_KEY_LEFT_ALT,
-                              KeyBinding.Category.MISC));
+                  public static Path dir() {
+                      return FabricLoader.getInstance().getConfigDir().resolve("transparent-skin").resolve("killsounds");
                   }
 
-                  /** true kalau freelook sedang aktif dan tidak sedang di layar menu */
-                  public static boolean isActive() {
-                      MinecraftClient mc = MinecraftClient.getInstance();
-                      return active && mc.currentScreen == null;
-                  }
-
-                  private static void snap(MinecraftClient mc) {
-                      if (mc.player != null) {
-                          yaw = mc.player.getYaw();
-                          pitch = mc.player.getPitch();
+                  public static void play() {
+                      try {
+                          Files.createDirectories(dir());
+                          List<Path> files = new ArrayList<>();
+                          try (Stream<Path> st = Files.list(dir())) {
+                              st.filter(p -> p.getFileName().toString().toLowerCase().endsWith(".mp3")).forEach(files::add);
+                          }
+                          if (files.isEmpty()) {
+                              return;
+                          }
+                          Music.Pcm pcm = Music.decode(files.get(RNG.nextInt(files.size())));
+                          if (src < 0) {
+                              src = AL10.alGenSources();
+                              buf = AL10.alGenBuffers();
+                              AL10.alSourcei(src, 0x202, 1);
+                              AL10.alSource3f(src, AL10.AL_POSITION, 0f, 0f, 0f);
+                          }
+                          AL10.alSourceStop(src);
+                          AL10.alSourcei(src, AL10.AL_BUFFER, 0);
+                          AL10.alBufferData(buf, pcm.format(), pcm.data(), pcm.rate());
+                          AL10.alSourcei(src, AL10.AL_BUFFER, buf);
+                          AL10.alSourcef(src, AL10.AL_GAIN, Config.get().killSoundVolume / 100f);
+                          AL10.alSourcePlay(src);
+                      } catch (Throwable ignored) {
                       }
+                  }
+              }
+
+              public static final class KillStreak {
+                  private static PlayerEntity target = null;
+                  private static int targetAge = 0;
+                  private static int streak = 0;
+
+                  private KillStreak() {
+                  }
+
+                  public static final String[] STYLES = {"Normal", "Tebal", "Miring", "Garis bawah"};
+                  public static final Formatting[] COLORS = {Formatting.WHITE, Formatting.GOLD, Formatting.RED,
+                          Formatting.AQUA, Formatting.GREEN, Formatting.YELLOW, Formatting.LIGHT_PURPLE};
+                  public static final String[] COLOR_NAMES = {"Putih", "Emas", "Merah", "Aqua", "Hijau", "Kuning", "Pink"};
+
+                  public static MutableText label(int n) {
+                      Config c = Config.get();
+                      MutableText t = Text.literal("Killstreak x" + n).formatted(COLORS[c.killColor]);
+                      if (c.killStyle == 1) {
+                          t = t.formatted(Formatting.BOLD);
+                      } else if (c.killStyle == 2) {
+                          t = t.formatted(Formatting.ITALIC);
+                      } else if (c.killStyle == 3) {
+                          t = t.formatted(Formatting.UNDERLINE);
+                      }
+                      return t;
+                  }
+
+                  public static void onAttack(PlayerEntity p) {
+                      target = p;
+                      targetAge = 0;
                   }
 
                   public static void tick(MinecraftClient mc) {
-                      if (key == null) {
+                      if (mc.player == null) {
                           return;
                       }
-                      if (Config.get().freelookToggle) {
-                          while (key.wasPressed()) {
-                              active = !active;
-                              if (active) {
-                                  snap(mc);
-                              }
+                      if (!mc.player.isAlive()) {
+                          streak = 0;
+                          target = null;
+                          return;
+                      }
+                      if (target == null) {
+                          return;
+                      }
+                      targetAge++;
+                      if (!target.isAlive() || target.isRemoved()) {
+                          if (targetAge < 60 && Config.get().killStreak) {
+                              streak++;
+                              KillSound.play();
+                              mc.inGameHud.setOverlayMessage(label(streak), false);
                           }
-                      } else {
-                          boolean want = key.isPressed();
-                          if (want && !active) {
-                              snap(mc);
-                          }
-                          active = want;
+                          target = null;
+                      } else if (targetAge > 60) {
+                          target = null;
                       }
                   }
+              }
 
-                  /** dipanggil dari mixin saat mouse menggerakkan pandangan */
-                  public static void turn(double dx, double dy) {
-                      yaw += (float) dx * 0.15f;
-                      pitch = Math.max(-90f, Math.min(90f, pitch + (float) dy * 0.15f));
+              public static final class KillStreakScreen extends Screen {
+                  private final Screen parent;
+
+                  public KillStreakScreen(Screen parent) {
+                      super(Text.literal("Killstreak"));
+                      this.parent = parent;
+                  }
+
+                  @Override
+                  protected void init() {
+                      Config c = Config.get();
+                      int w = Math.min(210, this.width - 20);
+                      int x = (this.width - w) / 2;
+                      int y = Math.max(34, (this.height - 150) / 2);
+
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Killstreak: " + (c.killStreak ? "ON" : "OFF")),
+                              b -> {
+                                  c.killStreak = !c.killStreak;
+                                  Config.save();
+                                  b.setMessage(Text.literal("Killstreak: " + (c.killStreak ? "ON" : "OFF")));
+                              }).dimensions(x, y, w, 20).build());
+
+                      this.addDrawableChild(new RangeSlider(x, y + 24, w, 20, "Volume suara", 0, 100, c.killSoundVolume, v -> {
+                          c.killSoundVolume = v;
+                          Config.save();
+                      }));
+
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Gaya teks: " + KillStreak.STYLES[c.killStyle]),
+                              b -> {
+                                  c.killStyle = (c.killStyle + 1) % KillStreak.STYLES.length;
+                                  Config.save();
+                                  b.setMessage(Text.literal("Gaya teks: " + KillStreak.STYLES[c.killStyle]));
+                              }).dimensions(x, y + 48, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Warna: " + KillStreak.COLOR_NAMES[c.killColor]),
+                              b -> {
+                                  c.killColor = (c.killColor + 1) % KillStreak.COLORS.length;
+                                  Config.save();
+                                  b.setMessage(Text.literal("Warna: " + KillStreak.COLOR_NAMES[c.killColor]));
+                              }).dimensions(x, y + 72, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes suara"),
+                              b -> KillSound.play()).dimensions(x, y + 96, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes teks"),
+                              b -> {
+                                  if (this.client != null && this.client.inGameHud != null) {
+                                      this.client.inGameHud.setOverlayMessage(KillStreak.label(3), false);
+                                  }
+                              }).dimensions(x, y + 120, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
+                              .dimensions(x, y + 148, w, 20).build());
+                  }
+
+                  @Override
+                  public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+                  }
+
+                  @Override
+                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+                      super.render(context, mouseX, mouseY, delta);
+                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
+                  }
+
+                  @Override
+                  public boolean shouldPause() {
+                      return false;
+                  }
+
+                  @Override
+                  public void close() {
+                      Config.save();
+                      if (this.client != null) {
+                          this.client.setScreen(this.parent);
+                      }
                   }
               }
 
@@ -3317,72 +3462,6 @@ jobs:
               }
           }
           TS_EOF_8
-          mkdir -p src/main/java/com/vizkovico/transparentskin/mixin
-          cat > src/main/java/com/vizkovico/transparentskin/mixin/EntityFreelookMixin.java <<'TS_EOF_9'
-          package com.vizkovico.transparentskin.mixin;
-
-          import com.vizkovico.transparentskin.TransparentSkinMod;
-          import net.minecraft.client.MinecraftClient;
-          import net.minecraft.entity.Entity;
-          import org.spongepowered.asm.mixin.Mixin;
-          import org.spongepowered.asm.mixin.injection.At;
-          import org.spongepowered.asm.mixin.injection.Inject;
-          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-          @Mixin(Entity.class)
-          public abstract class EntityFreelookMixin {
-
-              @Inject(method = "changeLookDirection(DD)V", at = @At("HEAD"), cancellable = true, require = 0)
-              private void ts$freelookTurn(double dx, double dy, CallbackInfo ci) {
-                  try {
-                      MinecraftClient mc = MinecraftClient.getInstance();
-                      if (mc != null && (Object) this == mc.player && TransparentSkinMod.FreeLook.isActive()) {
-                          TransparentSkinMod.FreeLook.turn(dx, dy);
-                          ci.cancel();
-                      }
-                  } catch (Throwable ignored) {
-                  }
-              }
-          }
-          TS_EOF_9
-          mkdir -p src/main/java/com/vizkovico/transparentskin/mixin
-          cat > src/main/java/com/vizkovico/transparentskin/mixin/CameraMixin.java <<'TS_EOF_10'
-          package com.vizkovico.transparentskin.mixin;
-
-          import com.vizkovico.transparentskin.TransparentSkinMod;
-          import net.minecraft.client.MinecraftClient;
-          import net.minecraft.client.render.Camera;
-          import net.minecraft.entity.Entity;
-          import net.minecraft.world.BlockView;
-          import org.spongepowered.asm.mixin.Mixin;
-          import org.spongepowered.asm.mixin.Shadow;
-          import org.spongepowered.asm.mixin.injection.At;
-          import org.spongepowered.asm.mixin.injection.Inject;
-          import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-          @Mixin(Camera.class)
-          public abstract class CameraMixin {
-
-              @Shadow
-              protected abstract void setRotation(float yaw, float pitch);
-
-              @Inject(
-                      method = "update(Lnet/minecraft/world/BlockView;Lnet/minecraft/entity/Entity;ZZF)V",
-                      at = @At("TAIL"),
-                      require = 0
-              )
-              private void ts$freelookCamera(BlockView area, Entity focused, boolean thirdPerson, boolean inverseView,
-                                             float tickDelta, CallbackInfo ci) {
-                  try {
-                      MinecraftClient mc = MinecraftClient.getInstance();
-                      if (mc != null && focused == mc.player && TransparentSkinMod.FreeLook.isActive()) {
-                          this.setRotation(TransparentSkinMod.FreeLook.yaw, TransparentSkinMod.FreeLook.pitch);
-                      }
-                  } catch (Throwable ignored) {
-                  }
-              }
-          }
-          TS_EOF_10
 
       - name: Build
         run: gradle build --no-daemon
