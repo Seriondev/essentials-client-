@@ -602,6 +602,7 @@ jobs:
                   public int killColor = 0;
                   public boolean killStreak = true;
                   public int killSoundVolume = 80;
+                  public String killSoundFile = "";
                   public List<String> accounts = new ArrayList<>();
                   public String currentAccount = "";
 
@@ -3073,17 +3074,30 @@ jobs:
                       return FabricLoader.getInstance().getConfigDir().resolve("transparent-skin").resolve("killsounds");
                   }
 
-                  public static void play() {
+                  public static List<String> names() {
+                      List<String> out = new ArrayList<>();
                       try {
                           Files.createDirectories(dir());
-                          List<Path> files = new ArrayList<>();
                           try (Stream<Path> st = Files.list(dir())) {
-                              st.filter(p -> p.getFileName().toString().toLowerCase().endsWith(".mp3")).forEach(files::add);
+                              st.map(p -> p.getFileName().toString())
+                                      .filter(n -> n.toLowerCase().endsWith(".mp3"))
+                                      .sorted(String::compareToIgnoreCase)
+                                      .forEach(out::add);
                           }
-                          if (files.isEmpty()) {
+                      } catch (Throwable ignored) {
+                      }
+                      return out;
+                  }
+
+                  public static void play() {
+                      try {
+                          List<String> names = names();
+                          if (names.isEmpty()) {
                               return;
                           }
-                          Music.Pcm pcm = Music.decode(files.get(RNG.nextInt(files.size())));
+                          String want = Config.get().killSoundFile;
+                          String pickName = (want != null && names.contains(want)) ? want : names.get(RNG.nextInt(names.size()));
+                          Music.Pcm pcm = Music.decode(dir().resolve(pickName));
                           if (src < 0) {
                               src = AL10.alGenSources();
                               buf = AL10.alGenBuffers();
@@ -3146,13 +3160,13 @@ jobs:
                       }
                       targetAge++;
                       if (!target.isAlive() || target.isRemoved()) {
-                          if (targetAge < 60 && Config.get().killStreak) {
+                          if (targetAge < 200 && Config.get().killStreak) {
                               streak++;
                               KillSound.play();
                               mc.inGameHud.setOverlayMessage(label(streak), false);
                           }
                           target = null;
-                      } else if (targetAge > 60) {
+                      } else if (targetAge > 200) {
                           target = null;
                       }
                   }
@@ -3202,18 +3216,39 @@ jobs:
                                   b.setMessage(Text.literal("Warna: " + KillStreak.COLOR_NAMES[c.killColor]));
                               }).dimensions(x, y + 72, w, 20).build());
 
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Suara: " + soundLabel(c)),
+                              b -> {
+                                  List<String> opts = new ArrayList<>();
+                                  opts.add("");
+                                  opts.addAll(KillSound.names());
+                                  int i = opts.indexOf(c.killSoundFile);
+                                  i = (i < 0 ? 0 : i + 1) % opts.size();
+                                  c.killSoundFile = opts.get(i);
+                                  Config.save();
+                                  b.setMessage(Text.literal("Suara: " + soundLabel(c)));
+                              }).dimensions(x, y + 96, w, 20).build());
+
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes suara"),
-                              b -> KillSound.play()).dimensions(x, y + 96, w, 20).build());
+                              b -> KillSound.play()).dimensions(x, y + 120, w, 20).build());
 
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes teks"),
                               b -> {
                                   if (this.client != null && this.client.inGameHud != null) {
                                       this.client.inGameHud.setOverlayMessage(KillStreak.label(3), false);
                                   }
-                              }).dimensions(x, y + 120, w, 20).build());
+                              }).dimensions(x, y + 144, w, 20).build());
 
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
-                              .dimensions(x, y + 148, w, 20).build());
+                              .dimensions(x, y + 168, w, 20).build());
+                  }
+
+                  private static String soundLabel(Config c) {
+                      if (c.killSoundFile == null || c.killSoundFile.isEmpty()) {
+                          return "Acak";
+                      }
+                      String n = c.killSoundFile;
+                      return n.length() > 16 ? n.substring(0, 15) + "." : n;
                   }
 
                   @Override
