@@ -181,6 +181,7 @@ jobs:
           import net.minecraft.util.ActionResult;
           import net.minecraft.text.MutableText;
           import net.minecraft.util.Formatting;
+          import net.minecraft.entity.LivingEntity;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -306,6 +307,9 @@ jobs:
                           MinecraftClient mc = MinecraftClient.getInstance();
                           if (player == mc.player && entity instanceof PlayerEntity pe && pe != mc.player) {
                               KillStreak.onAttack(pe);
+                          }
+                          if (player == mc.player && entity instanceof PlayerEntity && entity != mc.player && Config.get().hitSound) {
+                              HitSound.play();
                           }
                       } catch (Throwable ignored) {
                       }
@@ -603,6 +607,9 @@ jobs:
                   public boolean killStreak = true;
                   public int killSoundVolume = 80;
                   public String killSoundFile = "";
+                  public boolean hitSound = true;
+                  public int hitSoundVolume = 80;
+                  public String hitSoundFile = "";
                   public List<String> accounts = new ArrayList<>();
                   public String currentAccount = "";
 
@@ -1163,8 +1170,11 @@ jobs:
                           this.clearAndInit();
                       }).dimensions(x + 2 * (tw + 4), y + 96, tw, 20).build());
 
+                      int hw = (w - 4) / 2;
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Killstreak >"),
-                              b -> this.client.setScreen(new KillStreakScreen(this))).dimensions(x, y + 124, w, 20).build());
+                              b -> this.client.setScreen(new KillStreakScreen(this))).dimensions(x, y + 124, hw, 20).build());
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Hitsound >"),
+                              b -> this.client.setScreen(new HitSoundScreen(this))).dimensions(x + hw + 4, y + 124, hw, 20).build());
 
                       this.addDrawableChild(ButtonWidget.builder(Text.literal("Selesai"), b -> this.close())
                               .dimensions(x, y + 148, w, 20).build());
@@ -3042,6 +3052,151 @@ jobs:
                       if (!line.isEmpty()) {
                           c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(line), this.width / 2,
                                   Math.min(this.height - 10, py + ph + 6), 0xFFAAAAAA);
+                      }
+                  }
+
+                  @Override
+                  public boolean shouldPause() {
+                      return false;
+                  }
+
+                  @Override
+                  public void close() {
+                      Config.save();
+                      if (this.client != null) {
+                          this.client.setScreen(this.parent);
+                      }
+                  }
+              }
+
+              // ------------------------------------------------------------------
+              // Hitsound: suara saat memukul entity, dari config/transparent-skin/hitsounds
+              // ------------------------------------------------------------------
+              public static final class HitSound {
+                  private static final Random RNG = new Random();
+                  private static final Map<String, Music.Pcm> CACHE = new HashMap<>();
+                  private static int src = -1;
+                  private static int buf = -1;
+
+                  private HitSound() {
+                  }
+
+                  public static Path dir() {
+                      return FabricLoader.getInstance().getConfigDir().resolve("transparent-skin").resolve("hitsounds");
+                  }
+
+                  public static List<String> names() {
+                      List<String> out = new ArrayList<>();
+                      try {
+                          Files.createDirectories(dir());
+                          try (Stream<Path> st = Files.list(dir())) {
+                              st.map(p -> p.getFileName().toString())
+                                      .filter(n -> n.toLowerCase().endsWith(".mp3"))
+                                      .sorted(String::compareToIgnoreCase)
+                                      .forEach(out::add);
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                      return out;
+                  }
+
+                  public static void play() {
+                      try {
+                          List<String> names = names();
+                          if (names.isEmpty()) {
+                              return;
+                          }
+                          String want = Config.get().hitSoundFile;
+                          String pick = (want != null && names.contains(want)) ? want : names.get(RNG.nextInt(names.size()));
+                          Music.Pcm pcm = CACHE.get(pick);
+                          if (pcm == null) {
+                              pcm = Music.decode(dir().resolve(pick));
+                              CACHE.put(pick, pcm);
+                          }
+                          if (src < 0) {
+                              src = AL10.alGenSources();
+                              buf = AL10.alGenBuffers();
+                              AL10.alSourcei(src, 0x202, 1);
+                              AL10.alSource3f(src, AL10.AL_POSITION, 0f, 0f, 0f);
+                          }
+                          AL10.alSourceStop(src);
+                          AL10.alSourcei(src, AL10.AL_BUFFER, 0);
+                          AL10.alBufferData(buf, pcm.format(), pcm.data().duplicate(), pcm.rate());
+                          AL10.alSourcei(src, AL10.AL_BUFFER, buf);
+                          AL10.alSourcef(src, AL10.AL_GAIN, Config.get().hitSoundVolume / 100f);
+                          AL10.alSourcePlay(src);
+                      } catch (Throwable ignored) {
+                      }
+                  }
+              }
+
+              public static final class HitSoundScreen extends Screen {
+                  private final Screen parent;
+
+                  public HitSoundScreen(Screen parent) {
+                      super(Text.literal("Hitsound"));
+                      this.parent = parent;
+                  }
+
+                  private static String soundLabel(Config c) {
+                      if (c.hitSoundFile == null || c.hitSoundFile.isEmpty()) {
+                          return "Acak";
+                      }
+                      String n = c.hitSoundFile;
+                      return n.length() > 16 ? n.substring(0, 15) + "." : n;
+                  }
+
+                  @Override
+                  protected void init() {
+                      Config c = Config.get();
+                      int w = Math.min(210, this.width - 20);
+                      int x = (this.width - w) / 2;
+                      int y = Math.max(34, (this.height - 150) / 2);
+
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Hitsound: " + (c.hitSound ? "ON" : "OFF")),
+                              b -> {
+                                  c.hitSound = !c.hitSound;
+                                  Config.save();
+                                  b.setMessage(Text.literal("Hitsound: " + (c.hitSound ? "ON" : "OFF")));
+                              }).dimensions(x, y, w, 20).build());
+
+                      this.addDrawableChild(new RangeSlider(x, y + 24, w, 20, "Volume suara", 0, 100, c.hitSoundVolume, v -> {
+                          c.hitSoundVolume = v;
+                          Config.save();
+                      }));
+
+                      this.addDrawableChild(ButtonWidget.builder(
+                              Text.literal("Suara: " + soundLabel(c)),
+                              b -> {
+                                  List<String> opts = new ArrayList<>();
+                                  opts.add("");
+                                  opts.addAll(HitSound.names());
+                                  int i = opts.indexOf(c.hitSoundFile);
+                                  i = (i < 0 ? 0 : i + 1) % opts.size();
+                                  c.hitSoundFile = opts.get(i);
+                                  Config.save();
+                                  b.setMessage(Text.literal("Suara: " + soundLabel(c)));
+                              }).dimensions(x, y + 48, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes suara"),
+                              b -> HitSound.play()).dimensions(x, y + 72, w, 20).build());
+
+                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
+                              .dimensions(x, y + 96, w, 20).build());
+                  }
+
+                  @Override
+                  public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+                  }
+
+                  @Override
+                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+                      super.render(context, mouseX, mouseY, delta);
+                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
+                      if (HitSound.names().isEmpty()) {
+                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Taruh file .mp3 di config/transparent-skin/hitsounds"),
+                                  this.width / 2, this.height - 12, 0xFFAAAAAA);
                       }
                   }
 
