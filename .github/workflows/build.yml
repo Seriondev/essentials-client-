@@ -182,6 +182,8 @@ jobs:
           import net.minecraft.text.MutableText;
           import net.minecraft.util.Formatting;
           import net.minecraft.entity.LivingEntity;
+          import net.minecraft.client.gl.RenderPipelines;
+          import java.util.LinkedHashMap;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -374,6 +376,7 @@ jobs:
               private static final int ICON_HEAD = 4;
               private static final int ICON_ARROW = 5;
               private static final int ICON_NOTE = 6;
+              private static final int ICON_CAMERA = 7;
 
               private static final class Spec {
                   final int x;
@@ -428,6 +431,8 @@ jobs:
                   int setY = Math.round(222f / 360f * sh);
                   specs.add(new Spec(rightX, setY, 80, 20, "Settings", ICON_SLIDERS,
                           () -> client.setScreen(new ConfigScreen(screen))));
+                  specs.add(new Spec(rightX, setY - 24, 80, 20, "Foto", ICON_CAMERA,
+                          () -> client.setScreen(new ScreenshotScreen(screen))));
                   specs.add(new Spec(rightX - 46, setY, 19, 20, "", ICON_NOTE,
                           () -> client.setScreen(new MusicScreen(screen))));
                   specs.add(new Spec(rightX - 23, setY, 19, 20, "", ICON_FOLDER,
@@ -542,6 +547,10 @@ jobs:
                               art(ctx, sp.x + 5, sp.y + 6, new String[]{
                                       "hhhhhhhh", "hhhhhhhh", "hssssssh", "sbssssbs", "ssssssss", "ssssssss", "ssssssss", "ssssssss"});
                           }
+                          break;
+                      case ICON_CAMERA:
+                          art(ctx, sp.x + (sp.w - 7) / 2, sp.y + 5, new String[]{
+                                  "..###..", "#######", "#.....#", "#..#..#", "#.....#", "#######"});
                           break;
                       case ICON_NOTE:
                           art(ctx, sp.x + (sp.w - 6) / 2, sp.y + 5, new String[]{
@@ -3208,6 +3217,312 @@ jobs:
                   @Override
                   public void close() {
                       Config.save();
+                      if (this.client != null) {
+                          this.client.setScreen(this.parent);
+                      }
+                  }
+              }
+
+              // ------------------------------------------------------------------
+              // Viewer screenshot: folder screenshots bawaan Minecraft + folder referensi build
+              // ------------------------------------------------------------------
+              public static final class ShotCache {
+                  public static final class Tex {
+                      final Identifier id;
+                      final int w;
+                      final int h;
+
+                      Tex(Identifier id, int w, int h) {
+                          this.id = id;
+                          this.w = w;
+                          this.h = h;
+                      }
+                  }
+
+                  private static final int MAX = 40;
+                  private static final Map<Path, Tex> CACHE = new LinkedHashMap<>(16, 0.75f, true) {
+                      @Override
+                      protected boolean removeEldestEntry(Map.Entry<Path, Tex> e) {
+                          if (size() > MAX) {
+                              MinecraftClient.getInstance().getTextureManager().destroyTexture(e.getValue().id);
+                              return true;
+                          }
+                          return false;
+                      }
+                  };
+
+                  private ShotCache() {
+                  }
+
+                  public static Tex get(Path p) {
+                      Tex t = CACHE.get(p);
+                      if (t != null) {
+                          return t;
+                      }
+                      try (InputStream in = Files.newInputStream(p)) {
+                          NativeImage img = NativeImage.read(in);
+                          String key = "shot_" + Integer.toHexString(p.toString().hashCode());
+                          Identifier id = Identifier.of("transparentskin", key);
+                          MinecraftClient.getInstance().getTextureManager().registerTexture(id, new NativeImageBackedTexture(() -> key, img));
+                          t = new Tex(id, img.getWidth(), img.getHeight());
+                          CACHE.put(p, t);
+                          return t;
+                      } catch (Throwable e) {
+                          return null;
+                      }
+                  }
+              }
+
+              public static final class ScreenshotScreen extends Screen {
+                  private static final int COLS = 3;
+                  private static final int ROWS = 3;
+
+                  private final Screen parent;
+                  private int tab = 0;
+                  private int page = 0;
+                  private Path preview = null;
+                  private String status = "";
+                  private int px;
+                  private int py;
+                  private int pw;
+                  private int ph;
+                  private int sideW;
+                  private int gx;
+                  private int gy;
+                  private int gw;
+                  private int gh;
+
+                  public ScreenshotScreen(Screen parent) {
+                      super(Text.literal("Foto"));
+                      this.parent = parent;
+                  }
+
+                  public static Path referenceDir() {
+                      return FabricLoader.getInstance().getConfigDir().resolve("transparent-skin").resolve("referensi");
+                  }
+
+                  private static Path shotDir() {
+                      return FabricLoader.getInstance().getGameDir().resolve("screenshots");
+                  }
+
+                  private static long mtime(Path p) {
+                      try {
+                          return Files.getLastModifiedTime(p).toMillis();
+                      } catch (Throwable t) {
+                          return 0L;
+                      }
+                  }
+
+                  private List<Path> files() {
+                      Path dir = tab == 0 ? shotDir() : referenceDir();
+                      List<Path> out = new ArrayList<>();
+                      try {
+                          Files.createDirectories(dir);
+                          try (Stream<Path> st = Files.list(dir)) {
+                              st.filter(p -> {
+                                  String n = p.getFileName().toString().toLowerCase();
+                                  return n.endsWith(".png") || n.endsWith(".jpg") || n.endsWith(".jpeg");
+                              }).forEach(out::add);
+                          }
+                      } catch (Throwable ignored) {
+                      }
+                      if (tab == 0) {
+                          out.sort((a, b) -> Long.compare(mtime(b), mtime(a)));
+                      } else {
+                          out.sort((a, b) -> a.getFileName().toString().compareToIgnoreCase(b.getFileName().toString()));
+                      }
+                      return out;
+                  }
+
+                  private ButtonWidget invisible(int x, int y, int w, int h, Runnable action) {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), btn -> action.run()).dimensions(x, y, w, h).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
+                      return b;
+                  }
+
+                  @Override
+                  protected void init() {
+                      int w = this.width;
+                      int h = this.height;
+                      px = Math.round(w * 0.07f);
+                      py = Math.round(h * 0.126f);
+                      pw = w - 2 * px;
+                      ph = Math.round(h * 0.76f);
+                      sideW = Math.round(pw * 0.135f);
+                      gx = px + sideW + 8;
+                      gy = py + 30;
+                      gw = pw - sideW - 16;
+                      gh = ph - 60;
+
+                      if (preview != null) {
+                          List<Path> list = files();
+                          int idx = list.indexOf(preview);
+                          invisible(0, 0, w, h, () -> {
+                              preview = null;
+                              this.clearAndInit();
+                          });
+                          invisible(px + 8, py + ph - 26, 60, 20, () -> step(-1));
+                          invisible(px + pw - 68, py + ph - 26, 60, 20, () -> step(1));
+                          return;
+                      }
+
+                      invisible(Math.max(4, px - 26), py + 2, 20, 20, this::close);
+                      invisible(px, py + 26, sideW, 20, () -> {
+                          tab = 0;
+                          page = 0;
+                          this.clearAndInit();
+                      });
+                      invisible(px, py + 48, sideW, 20, () -> {
+                          tab = 1;
+                          page = 0;
+                          this.clearAndInit();
+                      });
+
+                      List<Path> list = files();
+                      int per = COLS * ROWS;
+                      int pages = Math.max(1, (list.size() + per - 1) / per);
+                      if (page >= pages) {
+                          page = pages - 1;
+                      }
+                      if (page < 0) {
+                          page = 0;
+                      }
+                      int cw = (gw - 8) / COLS;
+                      int ch = (gh - 30) / ROWS;
+                      for (int i = 0; i < per; i++) {
+                          int idx = page * per + i;
+                          if (idx >= list.size()) {
+                              break;
+                          }
+                          final Path p = list.get(idx);
+                          int cx = gx + (i % COLS) * (cw + 4);
+                          int cy = gy + (i / COLS) * (ch + 4);
+                          invisible(cx, cy, cw, ch, () -> {
+                              preview = p;
+                              this.clearAndInit();
+                          });
+                      }
+                      invisible(gx, py + ph - 24, 40, 20, () -> {
+                          if (page > 0) {
+                              page--;
+                              this.clearAndInit();
+                          }
+                      });
+                      invisible(gx + gw - 40, py + ph - 24, 40, 20, () -> {
+                          if (page < pages - 1) {
+                              page++;
+                              this.clearAndInit();
+                          }
+                      });
+                  }
+
+                  private void step(int dir) {
+                      List<Path> list = files();
+                      int idx = list.indexOf(preview);
+                      if (idx < 0 || list.isEmpty()) {
+                          return;
+                      }
+                      preview = list.get((idx + dir + list.size()) % list.size());
+                      this.clearAndInit();
+                  }
+
+                  @Override
+                  public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+                  }
+
+                  @Override
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      c.fill(0, 0, this.width, this.height, 0xFF101010);
+                      if (preview != null) {
+                          renderPreview(c);
+                          super.render(c, mx, my, delta);
+                          return;
+                      }
+                      c.fill(px, py, px + pw, py + ph, 0xFF1A1A1C);
+                      c.fill(px, py, px + pw, py + 22, 0xFF202023);
+                      c.fill(px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("Foto"), px + 8, py + 7, 0xFFFFFFFF);
+                      int bx = Math.max(4, px - 26);
+                      c.fill(bx, py + 2, bx + 20, py + 22, 0xFF26262A);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("<"), bx + 7, py + 8, 0xFFFFFFFF);
+                      c.fill(px + 2, py + 26, px + sideW - 2, py + 46, tab == 0 ? 0xFF38383D : 0xFF26262A);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("Screenshot"), px + 6, py + 32, 0xFFFFFFFF);
+                      c.fill(px + 2, py + 48, px + sideW - 2, py + 68, tab == 1 ? 0xFF38383D : 0xFF26262A);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("Referensi"), px + 6, py + 54, 0xFFFFFFFF);
+
+                      List<Path> list = files();
+                      int per = COLS * ROWS;
+                      int pages = Math.max(1, (list.size() + per - 1) / per);
+                      int cw = (gw - 8) / COLS;
+                      int ch = (gh - 30) / ROWS;
+                      for (int i = 0; i < per; i++) {
+                          int idx = page * per + i;
+                          if (idx >= list.size()) {
+                              break;
+                          }
+                          Path p = list.get(idx);
+                          int cx = gx + (i % COLS) * (cw + 4);
+                          int cy = gy + (i / COLS) * (ch + 4);
+                          c.fill(cx, cy, cx + cw, cy + ch, 0xFF222226);
+                          ShotCache.Tex t = ShotCache.get(p);
+                          if (t != null) {
+                              float sc = Math.min((cw - 4) / (float) t.w, (ch - 14) / (float) t.h);
+                              int dw = Math.max(1, Math.round(t.w * sc));
+                              int dh = Math.max(1, Math.round(t.h * sc));
+                              c.drawTexture(RenderPipelines.GUI_TEXTURED, t.id, cx + (cw - dw) / 2, cy + 2, 0, 0, dw, dh, t.w, t.h, t.w, t.h);
+                          }
+                          String name = p.getFileName().toString();
+                          if (name.length() > 14) {
+                              name = name.substring(0, 13) + ".";
+                          }
+                          c.drawTextWithShadow(this.textRenderer, Text.literal(name), cx + 2, cy + ch - 10, 0xFFAAAAAA);
+                      }
+                      c.fill(gx, py + ph - 24, gx + 40, py + ph - 4, 0xFF26262A);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("<"), gx + 16, py + ph - 18, 0xFFFFFFFF);
+                      c.fill(gx + gw - 40, py + ph - 24, gx + gw, py + ph - 4, 0xFF26262A);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(">"), gx + gw - 24, py + ph - 18, 0xFFFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal((page + 1) + "/" + pages),
+                              gx + gw / 2, py + ph - 18, 0xFFAAAAAA);
+                      if (list.isEmpty()) {
+                          String hint = tab == 0 ? "Belum ada screenshot (tekan F2 di game)"
+                                  : "Taruh foto (PNG/JPG) di config/transparent-skin/referensi";
+                          c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(hint), gx + gw / 2, gy + 20, 0xFFAAAAAA);
+                      }
+                      super.render(c, mx, my, delta);
+                  }
+
+                  private void renderPreview(DrawContext c) {
+                      ShotCache.Tex t = ShotCache.get(preview);
+                      String name = preview.getFileName().toString();
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(name), this.width / 2, 8, 0xFFFFFFFF);
+                      if (t != null) {
+                          float sc = Math.min((this.width * 0.92f) / t.w, (this.height * 0.78f) / t.h);
+                          int dw = Math.round(t.w * sc);
+                          int dh = Math.round(t.h * sc);
+                          int x = (this.width - dw) / 2;
+                          int y = 24 + (this.height - 60 - dh) / 2;
+                          c.drawTexture(RenderPipelines.GUI_TEXTURED, t.id, x, y, 0, 0, dw, dh, t.w, t.h, t.w, t.h);
+                      }
+                      c.fill(px + 8, py + ph - 26, px + 68, py + ph - 6, 0xFF26262A);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("< Sebelum"), px + 38, py + ph - 20, 0xFFFFFFFF);
+                      c.fill(px + pw - 68, py + ph - 26, px + pw - 8, py + ph - 6, 0xFF26262A);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Sesudah >"), px + pw - 38, py + ph - 20, 0xFFFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Ketuk di luar untuk menutup"), this.width / 2, this.height - 12, 0xFFAAAAAA);
+                  }
+
+                  @Override
+                  public boolean shouldPause() {
+                      return false;
+                  }
+
+                  @Override
+                  public void close() {
+                      if (preview != null) {
+                          preview = null;
+                          this.clearAndInit();
+                          return;
+                      }
                       if (this.client != null) {
                           this.client.setScreen(this.parent);
                       }
