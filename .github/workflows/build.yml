@@ -184,6 +184,7 @@ jobs:
           import net.minecraft.entity.LivingEntity;
           import net.minecraft.client.gl.RenderPipelines;
           import java.util.LinkedHashMap;
+          import net.minecraft.client.font.TextRenderer;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -1108,6 +1109,66 @@ jobs:
               // ------------------------------------------------------------------
               // GUI
               // ------------------------------------------------------------------
+              /** helper kartu kaca bersama untuk semua layar */
+              public static final class GlassKit {
+                  public static final int BLUE = 0xFF3B82F6;
+                  public static final int OFF = 0xFF3A3F47;
+                  public static final int CARD = 0xD0101418;
+
+                  private GlassKit() {
+                  }
+
+                  public static void card(DrawContext c, TextRenderer tr, int x, int y, int w, int h, String title, int accent) {
+                      ConfigScreen.rr(c, x, y, w, h, 10, CARD);
+                      c.fill(x + 10, y + 1, x + w - 10, y + 2, 0x55FFFFFF);
+                      ConfigScreen.rr(c, x + 10, y + 10, 6, 6, 3, accent);
+                      c.drawTextWithShadow(tr, Text.literal(title), x + 22, y + 9, 0xFFFFFFFF);
+                      c.fill(x + 10, y + 26, x + w - 10, y + 27, 0x22FFFFFF);
+                  }
+
+                  public static void row(DrawContext c, TextRenderer tr, int x, int y, int w, int h, String label, boolean hover) {
+                      if (hover) {
+                          ConfigScreen.rr(c, x, y, w, h, 5, 0x26FFFFFF);
+                      }
+                      c.drawTextWithShadow(tr, Text.literal(label), x + 6, y + (h - 8) / 2, 0xFFE6E8EB);
+                  }
+
+                  public static void toggle(DrawContext c, TextRenderer tr, int mx, int my, int x, int y, int w, int h, String label, boolean on) {
+                      row(c, tr, x, y, w, h, label, hov(mx, my, x, y, w, h));
+                      int pw = 24;
+                      int ph = 11;
+                      int px = x + w - pw - 6;
+                      int py = y + (h - ph) / 2;
+                      ConfigScreen.rr(c, px, py, pw, ph, 5, on ? BLUE : OFF);
+                      int kx = on ? px + pw - ph + 1 : px + 1;
+                      ConfigScreen.rr(c, kx, py + 1, ph - 2, ph - 2, 4, 0xFFFFFFFF);
+                  }
+
+                  public static void action(DrawContext c, TextRenderer tr, int mx, int my, int x, int y, int w, int h, String label, String value) {
+                      row(c, tr, x, y, w, h, label, hov(mx, my, x, y, w, h));
+                      int right = x + w - 6;
+                      if (value != null && !value.isEmpty()) {
+                          int vw = tr.getWidth(value);
+                          c.drawTextWithShadow(tr, Text.literal(value), right - 12 - vw, y + (h - 8) / 2, 0xFFBFC5CE);
+                      }
+                      c.drawTextWithShadow(tr, Text.literal(">"), right - 6, y + (h - 8) / 2, 0xFF8FB8FF);
+                  }
+
+                  public static void box(DrawContext c, int x1, int y1, int x2, int y2, int col) {
+                      int w = x2 - x1;
+                      int h = y2 - y1;
+                      if (w <= 0 || h <= 0) {
+                          return;
+                      }
+                      int r = Math.min(4, Math.min(w, h) / 2);
+                      ConfigScreen.rr(c, x1, y1, w, h, r, col);
+                  }
+
+                  public static boolean hov(int mx, int my, int x, int y, int w, int h) {
+                      return mx >= x && mx < x + w && my >= y && my < y + h;
+                  }
+              }
+
               /** slider bergaya kaca: tetap slider (bisa digeser), tampilan digambar ulang */
               private static final class GlassSlider extends SliderWidget {
                   private final String label;
@@ -1313,16 +1374,16 @@ jobs:
                           return;
                       }
                       r = Math.min(r, Math.min(w, h) / 2);
-                      for (int i = 0; i < h; i++) {
-                          int inset = 0;
-                          if (r > 0 && i < r) {
-                              double d = r - i - 0.5;
-                              inset = r - (int) Math.round(Math.sqrt(Math.max(0, r * r - d * d)));
-                          } else if (r > 0 && i >= h - r) {
-                              double d = r - (h - 1 - i) - 0.5;
-                              inset = r - (int) Math.round(Math.sqrt(Math.max(0, r * r - d * d)));
-                          }
+                      if (r <= 0) {
+                          c.fill(x, y, x + w, y + h, col);
+                          return;
+                      }
+                      c.fill(x, y + r, x + w, y + h - r, col);
+                      for (int i = 0; i < r; i++) {
+                          double d = r - i - 0.5;
+                          int inset = r - (int) Math.round(Math.sqrt(Math.max(0, r * r - d * d)));
                           c.fill(x + inset, y + i, x + w - inset, y + i + 1, col);
+                          c.fill(x + inset, y + h - 1 - i, x + w - inset, y + h - i, col);
                       }
                   }
 
@@ -3004,9 +3065,9 @@ jobs:
 
                   private void btn(DrawContext c, int x, int y, int w, int h, String label, boolean hover, boolean active, boolean blue) {
                       int fill = blue ? (hover ? BLUE_HOVER_M : BLUE_M) : (active ? 0xFF38383D : (hover ? 0xFF303035 : 0xFF26262A));
-                      c.fill(x, y, x + w, y + h, fill);
+                      GlassKit.box(c, x, y, x + w, y + h, fill);
                       if (active && !blue) {
-                          c.fill(x, y + h - 1, x + w, y + h, BLUE_LINE_M);
+                          GlassKit.box(c, x, y + h - 1, x + w, y + h, BLUE_LINE_M);
                       }
                       if (!label.isEmpty()) {
                           int tw = this.textRenderer.getWidth(label);
@@ -3023,7 +3084,7 @@ jobs:
                       for (int r = 0; r < circle.length; r++) {
                           for (int k = 0; k < circle[r].length(); k++) {
                               if (circle[r].charAt(k) == '#') {
-                                  c.fill(ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
+                                  GlassKit.box(c, ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
                               }
                           }
                       }
@@ -3042,12 +3103,12 @@ jobs:
                   @Override
                   public void render(DrawContext c, int mx, int my, float delta) {
                       Config cfg = Config.get();
-                      c.fill(0, 0, this.width, this.height, 0xFF101010);
-                      c.fill(px, py, px + pw, py + ph, 0xFF1A1A1C);
-                      c.fill(px, py, px + pw, py + 22, 0xFF202023);
-                      c.fill(px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
-                      c.fill(rightX - 1, py + 22, rightX, py + ph, 0xFF2E2E32);
-                      c.fill(px, seekY - 8, px + pw, seekY - 7, 0xFF2E2E32);
+                      GlassKit.box(c, 0, 0, this.width, this.height, 0xFF101010);
+                      GlassKit.box(c, px, py, px + pw, py + ph, 0xFF1A1A1C);
+                      GlassKit.box(c, px, py, px + pw, py + 22, 0xFF202023);
+                      GlassKit.box(c, px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
+                      GlassKit.box(c, rightX - 1, py + 22, rightX, py + ph, 0xFF2E2E32);
+                      GlassKit.box(c, px, seekY - 8, px + pw, seekY - 7, 0xFF2E2E32);
 
                       if (seek != null) {
                           seek.sync();
@@ -3083,7 +3144,7 @@ jobs:
                           String name = list.get(idx);
                           int y = start + i * 22;
                           boolean isCur = tab == 0 ? name.equals(cur) : (tab == 1 && openPl < 0 ? false : name.equals(cur));
-                          c.fill(listX, y, listX + listW, y + 20, isCur ? 0xFF243A57 : 0xFF222226);
+                          GlassKit.box(c, listX, y, listX + listW, y + 20, isCur ? 0xFF243A57 : 0xFF222226);
                           if (tab == 1 && openPl < 0) {
                               int n = cfg.playlists.get(idx).songs.size();
                               String shown = name.length() > 22 ? name.substring(0, 21) + "." : name;
@@ -3129,8 +3190,8 @@ jobs:
                       btn(c, cx - 50, transportY, 30, 20, "<<", hov(mx, my, cx - 50, transportY, 30, 20), false, false);
                       btn(c, cx - 16, transportY, 32, 20, "", hov(mx, my, cx - 16, transportY, 32, 20), false, true);
                       if (Music.isPlaying()) {
-                          c.fill(cx - 8, transportY + 6, cx - 5, transportY + 14, 0xFFFFFFFF);
-                          c.fill(cx + 1, transportY + 6, cx + 4, transportY + 14, 0xFFFFFFFF);
+                          GlassKit.box(c, cx - 8, transportY + 6, cx - 5, transportY + 14, 0xFFFFFFFF);
+                          GlassKit.box(c, cx + 1, transportY + 6, cx + 4, transportY + 14, 0xFFFFFFFF);
                       } else {
                           String[] tri = {"#...", "##..", "###.", "##..", "#..."};
                           int ox = cx - 6;
@@ -3138,7 +3199,7 @@ jobs:
                           for (int r = 0; r < tri.length; r++) {
                               for (int k = 0; k < tri[r].length(); k++) {
                                   if (tri[r].charAt(k) == '#') {
-                                      c.fill(ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
+                                      GlassKit.box(c, ox + k, oy + r, ox + k + 1, oy + r + 1, 0xFFFFFFFF);
                                   }
                               }
                           }
@@ -3243,10 +3304,20 @@ jobs:
 
               public static final class HitSoundScreen extends Screen {
                   private final Screen parent;
+                  private int cardX;
+                  private int cardY;
+                  private int cardW;
+                  private int cardH;
 
                   public HitSoundScreen(Screen parent) {
                       super(Text.literal("Hitsound"));
                       this.parent = parent;
+                  }
+
+                  private void btn(int x, int y, int w, int h, Runnable r) {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), btn -> r.run()).dimensions(x, y, w, h).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
                   }
 
                   private static String soundLabel(Config c) {
@@ -3254,47 +3325,36 @@ jobs:
                           return "Acak";
                       }
                       String n = c.hitSoundFile;
-                      return n.length() > 16 ? n.substring(0, 15) + "." : n;
+                      return n.length() > 14 ? n.substring(0, 13) + "." : n;
                   }
 
                   @Override
                   protected void init() {
                       Config c = Config.get();
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      int y = Math.max(34, (this.height - 150) / 2);
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Hitsound: " + (c.hitSound ? "ON" : "OFF")),
-                              b -> {
-                                  c.hitSound = !c.hitSound;
-                                  Config.save();
-                                  b.setMessage(Text.literal("Hitsound: " + (c.hitSound ? "ON" : "OFF")));
-                              }).dimensions(x, y, w, 20).build());
-
-                      this.addDrawableChild(new RangeSlider(x, y + 24, w, 20, "Volume suara", 0, 100, c.hitSoundVolume, v -> {
-                          c.hitSoundVolume = v;
+                      cardW = Math.min(240, this.width - 24);
+                      cardH = 170;
+                      cardX = (this.width - cardW) / 2;
+                      cardY = Math.max(30, (this.height - cardH) / 2 - 6);
+                      int x = cardX + 8;
+                      int w = cardW - 16;
+                      int y = cardY + 34;
+                      btn(x, y, w, 20, () -> {
+                          c.hitSound = !c.hitSound;
                           Config.save();
-                      }));
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Suara: " + soundLabel(c)),
-                              b -> {
-                                  List<String> opts = new ArrayList<>();
-                                  opts.add("");
-                                  opts.addAll(HitSound.names());
-                                  int i = opts.indexOf(c.hitSoundFile);
-                                  i = (i < 0 ? 0 : i + 1) % opts.size();
-                                  c.hitSoundFile = opts.get(i);
-                                  Config.save();
-                                  b.setMessage(Text.literal("Suara: " + soundLabel(c)));
-                              }).dimensions(x, y + 48, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes suara"),
-                              b -> HitSound.play()).dimensions(x, y + 72, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
-                              .dimensions(x, y + 96, w, 20).build());
+                      });
+                      this.addDrawableChild(new GlassSlider(x, y + 22, w, 20, "Volume suara", 0, 100, c.hitSoundVolume,
+                              v -> c.hitSoundVolume = v));
+                      btn(x, y + 44, w, 20, () -> {
+                          List<String> opts = new ArrayList<>();
+                          opts.add("");
+                          opts.addAll(HitSound.names());
+                          int i = opts.indexOf(c.hitSoundFile);
+                          i = (i < 0 ? 0 : i + 1) % opts.size();
+                          c.hitSoundFile = opts.get(i);
+                          Config.save();
+                      });
+                      btn(x, y + 66, w, 20, HitSound::play);
+                      btn(x, cardY + cardH - 28, w, 20, this::close);
                   }
 
                   @Override
@@ -3302,13 +3362,22 @@ jobs:
                   }
 
                   @Override
-                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-                      super.render(context, mouseX, mouseY, delta);
-                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      Config cfg = Config.get();
+                      c.fill(0, 0, this.width, this.height, 0x66000000);
+                      GlassKit.card(c, this.textRenderer, cardX, cardY, cardW, cardH, "Hitsound", GlassKit.BLUE);
+                      int x = cardX + 8;
+                      int w = cardW - 16;
+                      int y = cardY + 34;
+                      GlassKit.toggle(c, this.textRenderer, mx, my, x, y, w, 20, "Hitsound", cfg.hitSound);
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 44, w, 20, "Suara", soundLabel(cfg));
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 66, w, 20, "Tes suara", "");
+                      GlassKit.row(c, this.textRenderer, x, cardY + cardH - 28, w, 20, "< Kembali", GlassKit.hov(mx, my, x, cardY + cardH - 28, w, 20));
                       if (HitSound.names().isEmpty()) {
-                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Taruh file .mp3 di config/transparent-skin/hitsounds"),
-                                  this.width / 2, this.height - 12, 0xFFAAAAAA);
+                          c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Taruh .mp3 di config/transparent-skin/hitsounds"),
+                                  this.width / 2, cardY + cardH + 8, 0xFFAAAAAA);
                       }
+                      super.render(c, mx, my, delta);
                   }
 
                   @Override
@@ -3535,22 +3604,22 @@ jobs:
 
                   @Override
                   public void render(DrawContext c, int mx, int my, float delta) {
-                      c.fill(0, 0, this.width, this.height, 0xFF101010);
+                      GlassKit.box(c, 0, 0, this.width, this.height, 0xFF101010);
                       if (preview != null) {
                           renderPreview(c);
                           super.render(c, mx, my, delta);
                           return;
                       }
-                      c.fill(px, py, px + pw, py + ph, 0xFF1A1A1C);
-                      c.fill(px, py, px + pw, py + 22, 0xFF202023);
-                      c.fill(px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
+                      GlassKit.box(c, px, py, px + pw, py + ph, 0xFF1A1A1C);
+                      GlassKit.box(c, px, py, px + pw, py + 22, 0xFF202023);
+                      GlassKit.box(c, px + sideW, py + 22, px + sideW + 1, py + ph, 0xFF2E2E32);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("Foto"), px + 8, py + 7, 0xFFFFFFFF);
                       int bx = Math.max(4, px - 26);
-                      c.fill(bx, py + 2, bx + 20, py + 22, 0xFF26262A);
+                      GlassKit.box(c, bx, py + 2, bx + 20, py + 22, 0xFF26262A);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("<"), bx + 7, py + 8, 0xFFFFFFFF);
-                      c.fill(px + 2, py + 26, px + sideW - 2, py + 46, tab == 0 ? 0xFF38383D : 0xFF26262A);
+                      GlassKit.box(c, px + 2, py + 26, px + sideW - 2, py + 46, tab == 0 ? 0xFF38383D : 0xFF26262A);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("Screenshot"), px + 6, py + 32, 0xFFFFFFFF);
-                      c.fill(px + 2, py + 48, px + sideW - 2, py + 68, tab == 1 ? 0xFF38383D : 0xFF26262A);
+                      GlassKit.box(c, px + 2, py + 48, px + sideW - 2, py + 68, tab == 1 ? 0xFF38383D : 0xFF26262A);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("Referensi"), px + 6, py + 54, 0xFFFFFFFF);
 
                       List<Path> list = files();
@@ -3566,7 +3635,7 @@ jobs:
                           Path p = list.get(idx);
                           int cx = gx + (i % COLS) * (cw + 4);
                           int cy = gy + (i / COLS) * (ch + 4);
-                          c.fill(cx, cy, cx + cw, cy + ch, 0xFF222226);
+                          GlassKit.box(c, cx, cy, cx + cw, cy + ch, 0xFF222226);
                           ShotCache.Tex t = ShotCache.get(p);
                           if (t != null) {
                               float sc = Math.min((cw - 4) / (float) t.w, (ch - 14) / (float) t.h);
@@ -3580,9 +3649,9 @@ jobs:
                           }
                           c.drawTextWithShadow(this.textRenderer, Text.literal(name), cx + 2, cy + ch - 10, 0xFFAAAAAA);
                       }
-                      c.fill(gx, py + ph - 24, gx + 40, py + ph - 4, 0xFF26262A);
+                      GlassKit.box(c, gx, py + ph - 24, gx + 40, py + ph - 4, 0xFF26262A);
                       c.drawTextWithShadow(this.textRenderer, Text.literal("<"), gx + 16, py + ph - 18, 0xFFFFFFFF);
-                      c.fill(gx + gw - 40, py + ph - 24, gx + gw, py + ph - 4, 0xFF26262A);
+                      GlassKit.box(c, gx + gw - 40, py + ph - 24, gx + gw, py + ph - 4, 0xFF26262A);
                       c.drawTextWithShadow(this.textRenderer, Text.literal(">"), gx + gw - 24, py + ph - 18, 0xFFFFFFFF);
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal((page + 1) + "/" + pages),
                               gx + gw / 2, py + ph - 18, 0xFFAAAAAA);
@@ -3606,9 +3675,9 @@ jobs:
                           int y = 24 + (this.height - 60 - dh) / 2;
                           c.drawTexture(RenderPipelines.GUI_TEXTURED, t.id, x, y, 0, 0, dw, dh, t.w, t.h, t.w, t.h);
                       }
-                      c.fill(px + 8, py + ph - 26, px + 68, py + ph - 6, 0xFF26262A);
+                      GlassKit.box(c, px + 8, py + ph - 26, px + 68, py + ph - 6, 0xFF26262A);
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("< Sebelum"), px + 38, py + ph - 20, 0xFFFFFFFF);
-                      c.fill(px + pw - 68, py + ph - 26, px + pw - 8, py + ph - 6, 0xFF26262A);
+                      GlassKit.box(c, px + pw - 68, py + ph - 26, px + pw - 8, py + ph - 6, 0xFF26262A);
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Sesudah >"), px + pw - 38, py + ph - 20, 0xFFFFFFFF);
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Ketuk di luar untuk menutup"), this.width / 2, this.height - 12, 0xFFAAAAAA);
                   }
@@ -3746,73 +3815,62 @@ jobs:
 
               public static final class KillStreakScreen extends Screen {
                   private final Screen parent;
+                  private int cardX;
+                  private int cardY;
+                  private int cardW;
+                  private int cardH;
 
                   public KillStreakScreen(Screen parent) {
                       super(Text.literal("Killstreak"));
                       this.parent = parent;
                   }
 
+                  private void btn(int x, int y, int w, int h, Runnable r) {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), btn -> r.run()).dimensions(x, y, w, h).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
+                  }
+
                   @Override
                   protected void init() {
                       Config c = Config.get();
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      int y = Math.max(34, (this.height - 150) / 2);
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Killstreak: " + (c.killStreak ? "ON" : "OFF")),
-                              b -> {
-                                  c.killStreak = !c.killStreak;
-                                  Config.save();
-                                  b.setMessage(Text.literal("Killstreak: " + (c.killStreak ? "ON" : "OFF")));
-                              }).dimensions(x, y, w, 20).build());
-
-                      this.addDrawableChild(new RangeSlider(x, y + 24, w, 20, "Volume suara", 0, 100, c.killSoundVolume, v -> {
-                          c.killSoundVolume = v;
+                      cardW = Math.min(240, this.width - 24);
+                      cardH = 240;
+                      cardX = (this.width - cardW) / 2;
+                      cardY = Math.max(30, (this.height - cardH) / 2 - 6);
+                      int x = cardX + 8;
+                      int w = cardW - 16;
+                      int y = cardY + 34;
+                      btn(x, y, w, 20, () -> {
+                          c.killStreak = !c.killStreak;
                           Config.save();
-                      }));
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Gaya teks: " + KillStreak.STYLES[c.killStyle]),
-                              b -> {
-                                  c.killStyle = (c.killStyle + 1) % KillStreak.STYLES.length;
-                                  Config.save();
-                                  b.setMessage(Text.literal("Gaya teks: " + KillStreak.STYLES[c.killStyle]));
-                              }).dimensions(x, y + 48, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Warna: " + KillStreak.COLOR_NAMES[c.killColor]),
-                              b -> {
-                                  c.killColor = (c.killColor + 1) % KillStreak.COLORS.length;
-                                  Config.save();
-                                  b.setMessage(Text.literal("Warna: " + KillStreak.COLOR_NAMES[c.killColor]));
-                              }).dimensions(x, y + 72, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Suara: " + soundLabel(c)),
-                              b -> {
-                                  List<String> opts = new ArrayList<>();
-                                  opts.add("");
-                                  opts.addAll(KillSound.names());
-                                  int i = opts.indexOf(c.killSoundFile);
-                                  i = (i < 0 ? 0 : i + 1) % opts.size();
-                                  c.killSoundFile = opts.get(i);
-                                  Config.save();
-                                  b.setMessage(Text.literal("Suara: " + soundLabel(c)));
-                              }).dimensions(x, y + 96, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes suara"),
-                              b -> KillSound.play()).dimensions(x, y + 120, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tes teks"),
-                              b -> {
-                                  if (this.client != null && this.client.inGameHud != null) {
-                                      this.client.inGameHud.setOverlayMessage(KillStreak.label(3), false);
-                                  }
-                              }).dimensions(x, y + 144, w, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
-                              .dimensions(x, y + 168, w, 20).build());
+                      });
+                      this.addDrawableChild(new GlassSlider(x, y + 22, w, 20, "Volume suara", 0, 100, c.killSoundVolume,
+                              v -> c.killSoundVolume = v));
+                      btn(x, y + 44, w, 20, () -> {
+                          c.killStyle = (c.killStyle + 1) % KillStreak.STYLES.length;
+                          Config.save();
+                      });
+                      btn(x, y + 66, w, 20, () -> {
+                          c.killColor = (c.killColor + 1) % KillStreak.COLORS.length;
+                          Config.save();
+                      });
+                      btn(x, y + 88, w, 20, () -> {
+                          List<String> opts = new ArrayList<>();
+                          opts.add("");
+                          opts.addAll(KillSound.names());
+                          int i = opts.indexOf(c.killSoundFile);
+                          i = (i < 0 ? 0 : i + 1) % opts.size();
+                          c.killSoundFile = opts.get(i);
+                          Config.save();
+                      });
+                      btn(x, y + 110, w, 20, KillSound::play);
+                      btn(x, y + 132, w, 20, () -> {
+                          if (this.client != null && this.client.inGameHud != null) {
+                              this.client.inGameHud.setOverlayMessage(KillStreak.label(3), false);
+                          }
+                      });
+                      btn(x, cardY + cardH - 28, w, 20, this::close);
                   }
 
                   private static String soundLabel(Config c) {
@@ -3820,7 +3878,7 @@ jobs:
                           return "Acak";
                       }
                       String n = c.killSoundFile;
-                      return n.length() > 16 ? n.substring(0, 15) + "." : n;
+                      return n.length() > 14 ? n.substring(0, 13) + "." : n;
                   }
 
                   @Override
@@ -3828,9 +3886,23 @@ jobs:
                   }
 
                   @Override
-                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-                      super.render(context, mouseX, mouseY, delta);
-                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      Config cfg = Config.get();
+                      c.fill(0, 0, this.width, this.height, 0x66000000);
+                      GlassKit.card(c, this.textRenderer, cardX, cardY, cardW, cardH, "Killstreak", GlassKit.BLUE);
+                      int x = cardX + 8;
+                      int w = cardW - 16;
+                      int y = cardY + 34;
+                      GlassKit.toggle(c, this.textRenderer, mx, my, x, y, w, 20, "Killstreak", cfg.killStreak);
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 44, w, 20, "Gaya teks",
+                              KillStreak.STYLES[cfg.killStyle]);
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 66, w, 20, "Warna",
+                              KillStreak.COLOR_NAMES[cfg.killColor]);
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 88, w, 20, "Suara", soundLabel(cfg));
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 110, w, 20, "Tes suara", "");
+                      GlassKit.action(c, this.textRenderer, mx, my, x, y + 132, w, 20, "Tes teks", "");
+                      GlassKit.row(c, this.textRenderer, x, cardY + cardH - 28, w, 20, "< Kembali", GlassKit.hov(mx, my, x, cardY + cardH - 28, w, 20));
+                      super.render(c, mx, my, delta);
                   }
 
                   @Override
