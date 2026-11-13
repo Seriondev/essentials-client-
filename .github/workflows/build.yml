@@ -310,6 +310,16 @@ jobs:
                   });
 
                   HudExtras.init();
+                  ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+                      if (screen instanceof TitleScreen) {
+                          ScreenEvents.afterRender(screen).register((s2, ctx, mx, my, td) -> {
+                              try {
+                                  drawClientLogo(ctx, s2.width, s2.height);
+                              } catch (Throwable ignored) {
+                              }
+                          });
+                      }
+                  });
                   AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
                       try {
                           MinecraftClient mc = MinecraftClient.getInstance();
@@ -369,6 +379,20 @@ jobs:
                       } catch (Throwable ignored) {
                       }
                   });
+              }
+
+              /** menimpa logo Minecraft di title screen dengan logo + nama client */
+              private static void drawClientLogo(DrawContext c, int w, int h) {
+                  int cx = w / 2;
+                  int top = Math.max(4, h / 14);
+                  int lw = Math.max(36, Math.min(72, h / 6));
+                  int panelW = Math.min(w - 20, lw * 3);
+                  GlassKit.box(c, cx - panelW / 2, Math.max(2, top - 6), cx + panelW / 2, top + lw + 24, 0xE6101418);
+                  c.drawTexture(RenderPipelines.GUI_TEXTURED,
+                          Identifier.of("transparentskin", "textures/gui/logo.png"),
+                          cx - lw / 2, top, 0, 0, lw, lw, 256, 256);
+                  c.drawCenteredTextWithShadow(MinecraftClient.getInstance().textRenderer,
+                          Text.literal("Peak Client"), cx, top + lw + 8, 0xFFFFFFFF);
               }
 
               private static void addWidget(Screen screen, ClickableWidget widget) {
@@ -3796,32 +3820,6 @@ jobs:
                       c.drawTexture(RenderPipelines.GUI_TEXTURED, tex, x, y, u, v, w * s, h * s, w, h, 64, 64);
                   }
 
-                  private void sprite(DrawContext c, int x, int y, float t) {
-                      Skins.Loaded sel = Skins.selectedLoaded();
-                      int s = 3;
-                      float sw = (float) Math.sin(t * 8f);
-                      int legA = Math.round(sw * 2f);
-                      int armA = -legA;
-                      int by = y - Math.round(Math.abs(sw) * 2f);
-                      if (sel == null) {
-                          // belum pilih skin: figur kotak sederhana
-                          c.fill(x + 4 * s, by, x + 12 * s, by + 8 * s, 0xFFE0B48A);
-                          c.fill(x + 4 * s, by + 8 * s, x + 12 * s, by + 20 * s, 0xFF3B82F6);
-                          c.fill(x, by + 8 * s + armA, x + 4 * s, by + 20 * s + armA, 0xFFE0B48A);
-                          c.fill(x + 12 * s, by + 8 * s - armA, x + 16 * s, by + 20 * s - armA, 0xFFE0B48A);
-                          c.fill(x + 4 * s, by + 20 * s + legA, x + 8 * s, by + 32 * s + legA, 0xFF1E293B);
-                          c.fill(x + 8 * s, by + 20 * s - legA, x + 12 * s, by + 32 * s - legA, 0xFF1E293B);
-                          return;
-                      }
-                      Identifier tex = sel.id;
-                      part(c, tex, x + 4 * s, by, 8, 8, 8, 8, s);
-                      part(c, tex, x + 4 * s, by + 8 * s, 20, 20, 8, 12, s);
-                      part(c, tex, x, by + 8 * s + armA, 44, 20, 4, 12, s);
-                      part(c, tex, x + 12 * s, by + 8 * s - armA, 36, 52, 4, 12, s);
-                      part(c, tex, x + 4 * s, by + 20 * s + legA, 4, 20, 4, 12, s);
-                      part(c, tex, x + 8 * s, by + 20 * s - legA, 20, 52, 4, 12, s);
-                  }
-
                   @Override
                   public void render(DrawContext c, int mx, int my, float delta) {
                       float t = (System.currentTimeMillis() - start) / 1000f;
@@ -3853,7 +3851,6 @@ jobs:
                       int pa = ((int) (fade * pulse * 200) & 0xFF) << 24;
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Press to enter"), cx, ly + lw + 22, pa | 0xFFFFFF);
 
-                      sprite(c, (int) ((t * 70f) % (w + 60)) - 30, (int) (h * 0.78f), t);
 
                       int overlay = ((int) ((1f - fade) * 255) & 0xFF) << 24;
                       if (overlay != 0) {
