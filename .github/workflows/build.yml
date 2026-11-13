@@ -246,6 +246,7 @@ jobs:
           public class TransparentSkinMod implements ClientModInitializer {
 
               private static boolean openRequested = false;
+              private static boolean splashShown = false;
 
               @Override
               public void onInitializeClient() {
@@ -286,6 +287,10 @@ jobs:
 
                   // GUI dibuka di tick berikutnya, supaya tidak langsung ketutup oleh chat screen
                   ClientTickEvents.END_CLIENT_TICK.register(client -> {
+                      if (!splashShown && client.currentScreen instanceof TitleScreen) {
+                          splashShown = true;
+                          client.setScreen(new PeakSplash());
+                      }
                       try {
                           HudExtras.tick(client);
                       } catch (Throwable ignored) {
@@ -513,8 +518,8 @@ jobs:
 
               private static void drawSpec(DrawContext ctx, Spec sp, int mx, int my) {
                   boolean hover = mx >= sp.x && mx < sp.x + sp.w && my >= sp.y && my < sp.y + sp.h;
-                  ctx.fill(sp.x, sp.y, sp.x + sp.w, sp.y + sp.h, 0xFF58585E);
-                  ctx.fill(sp.x + 1, sp.y + 1, sp.x + sp.w - 1, sp.y + sp.h - 1, hover ? 0xFF3E3E44 : 0xFF2B2B30);
+                  GlassKit.box(ctx, sp.x, sp.y, sp.x + sp.w, sp.y + sp.h, 0xFF58585E);
+                  GlassKit.box(ctx, sp.x + 1, sp.y + 1, sp.x + sp.w - 1, sp.y + sp.h - 1, hover ? 0xFF3E3E44 : 0xFF2B2B30);
                   var tr = MinecraftClient.getInstance().textRenderer;
                   int ty = sp.y + (sp.h - 8) / 2;
                   int tx = sp.icon == ICON_HEAD ? sp.x + 18 : sp.x + 8;
@@ -527,9 +532,9 @@ jobs:
                           int iy = sp.y + 6;
                           for (int r = 0; r < 3; r++) {
                               int ly = iy + r * 3;
-                              ctx.fill(ix, ly, ix + 9, ly + 1, 0xFFE8E8E8);
+                              GlassKit.box(ctx, ix, ly, ix + 9, ly + 1, 0xFFE8E8E8);
                               int kx = ix + (r == 0 ? 2 : (r == 1 ? 5 : 3));
-                              ctx.fill(kx, ly - 1, kx + 2, ly + 2, 0xFFE8E8E8);
+                              GlassKit.box(ctx, kx, ly - 1, kx + 2, ly + 2, 0xFFE8E8E8);
                           }
                           break;
                       }
@@ -1567,166 +1572,6 @@ jobs:
                       }
                       Config.get().currentAccount = name;
                       Config.save();
-                  }
-              }
-
-              public static final class AccountScreen extends Screen {
-                  private final Screen parent;
-                  private TextFieldWidget field;
-                  private String filter = "";
-                  private String status = "";
-                  private String pageText = "1/1";
-                  private int accPage = 0;
-                  private int listX;
-                  private int listY;
-                  private int listW;
-                  private final List<ClickableWidget> listWidgets = new ArrayList<>();
-
-                  public AccountScreen(Screen parent) {
-                      super(Text.literal("Akun Offline"));
-                      this.parent = parent;
-                  }
-
-                  @Override
-                  protected void init() {
-                      listWidgets.clear();
-                      listW = Math.min(210, this.width - 20);
-                      listX = (this.width - listW) / 2;
-                      int y = Math.max(34, (this.height - 190) / 2 + 8);
-
-                      field = new TextFieldWidget(this.textRenderer, listX, y, listW - 64, 20, Text.literal("Nama akun"));
-                      field.setMaxLength(16);
-                      field.setPlaceholder(Text.literal("Ketik nama (cari / tambah)"));
-                      field.setText(filter);
-                      field.setChangedListener(t -> {
-                          filter = t;
-                          accPage = 0;
-                          rebuildList();
-                      });
-                      this.addDrawableChild(field);
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tambah"), b -> addAccount())
-                              .dimensions(listX + listW - 60, y, 60, 20).build());
-
-                      listY = y + 26;
-                      int ny = listY + 5 * 22;
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("<"), b -> {
-                          if (accPage > 0) {
-                              accPage--;
-                              rebuildList();
-                          }
-                      }).dimensions(listX, ny, 24, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal(">"), b -> {
-                          accPage++;
-                          rebuildList();
-                      }).dimensions(listX + listW - 24, ny, 24, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> this.close())
-                              .dimensions(listX, ny + 24, listW, 20).build());
-
-                      rebuildList();
-                  }
-
-                  private List<String> filtered() {
-                      String f = filter == null ? "" : filter.toLowerCase();
-                      List<String> r = new ArrayList<>();
-                      for (String a : Config.get().accounts) {
-                          if (f.isEmpty() || a.toLowerCase().contains(f)) {
-                              r.add(a);
-                          }
-                      }
-                      return r;
-                  }
-
-                  private void rebuildList() {
-                      for (ClickableWidget w : listWidgets) {
-                          this.remove(w);
-                      }
-                      listWidgets.clear();
-                      List<String> list = filtered();
-                      int per = 5;
-                      int pages = Math.max(1, (list.size() + per - 1) / per);
-                      if (accPage >= pages) {
-                          accPage = pages - 1;
-                      }
-                      pageText = (accPage + 1) + "/" + pages;
-                      String cur = Accounts.currentName();
-                      for (int i = 0; i < per; i++) {
-                          int idx = accPage * per + i;
-                          if (idx >= list.size()) {
-                              break;
-                          }
-                          String name = list.get(idx);
-                          ButtonWidget sel = ButtonWidget.builder(
-                                  Text.literal((name.equals(cur) ? "> " : "") + name),
-                                  b -> select(name)).dimensions(listX, listY + i * 22, listW - 28, 20).build();
-                          ButtonWidget del = ButtonWidget.builder(Text.literal("X"),
-                                  b -> delete(name)).dimensions(listX + listW - 24, listY + i * 22, 24, 20).build();
-                          this.addDrawableChild(sel);
-                          this.addDrawableChild(del);
-                          listWidgets.add(sel);
-                          listWidgets.add(del);
-                      }
-                  }
-
-                  private void addAccount() {
-                      String n = field.getText().trim();
-                      List<String> acc = Config.get().accounts;
-                      if (!Accounts.valid(n)) {
-                          status = "Nama: 1-16 karakter (huruf, angka, _)";
-                          return;
-                      }
-                      if (acc.size() >= 500) {
-                          status = "Maksimal 500 akun";
-                          return;
-                      }
-                      for (String a : acc) {
-                          if (a.equalsIgnoreCase(n)) {
-                              status = "Akun sudah ada";
-                              return;
-                          }
-                      }
-                      acc.add(n);
-                      Config.save();
-                      status = "Ditambahkan: " + n;
-                      field.setText("");
-                      filter = "";
-                      rebuildList();
-                  }
-
-                  private void delete(String name) {
-                      Config.get().accounts.remove(name);
-                      Config.save();
-                      status = "Dihapus: " + name;
-                      rebuildList();
-                  }
-
-                  private void select(String name) {
-                      try {
-                          Accounts.switchTo(name);
-                          this.close();
-                      } catch (Throwable t) {
-                          status = "Gagal: " + t.getMessage();
-                      }
-                  }
-
-                  @Override
-                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-                      super.render(context, mouseX, mouseY, delta);
-                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
-                      context.drawCenteredTextWithShadow(this.textRenderer,
-                              Text.literal(pageText + "  |  " + Config.get().accounts.size() + "/500 akun"),
-                              this.width / 2, listY + 5 * 22 + 6, 0xFFAAAAAA);
-                      if (!status.isEmpty()) {
-                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal(status),
-                                  this.width / 2, this.height - 12, 0xFFFFFF55);
-                      }
-                  }
-
-                  @Override
-                  public void close() {
-                      if (this.client != null) {
-                          this.client.setScreen(this.parent);
-                      }
                   }
               }
 
@@ -3920,6 +3765,279 @@ jobs:
               }
 
               // ------------------------------------------------------------------
+              // Splash Peak Client: logo, teks, pemain berjalan dari kiri, lalu masuk ke title screen
+              // ------------------------------------------------------------------
+              public static final class PeakSplash extends Screen {
+                  private static final Identifier LOGO = Identifier.of("transparentskin", "textures/gui/logo.png");
+                  private final long start = System.currentTimeMillis();
+
+                  public PeakSplash() {
+                      super(Text.literal("Peak Client"));
+                  }
+
+                  @Override
+                  protected void init() {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), x -> enter()).dimensions(0, 0, this.width, this.height).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
+                  }
+
+                  private void enter() {
+                      if (this.client != null) {
+                          this.client.setScreen(new TitleScreen(false));
+                      }
+                  }
+
+                  @Override
+                  public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+                  }
+
+                  private static void part(DrawContext c, Identifier tex, int x, int y, int u, int v, int w, int h, int s) {
+                      c.drawTexture(RenderPipelines.GUI_TEXTURED, tex, x, y, u, v, w * s, h * s, w, h, 64, 64);
+                  }
+
+                  private void sprite(DrawContext c, int x, int y, float t) {
+                      Identifier tex = Skins.previewTextures().texture();
+                      int s = 3;
+                      float sw = (float) Math.sin(t * 8f);
+                      int legA = Math.round(sw * 2f);
+                      int armA = -legA;
+                      int by = y - Math.round(Math.abs(sw) * 2f);
+                      part(c, tex, x + 4 * s, by, 8, 8, 8, 8, s);
+                      part(c, tex, x + 4 * s, by + 8 * s, 20, 20, 8, 12, s);
+                      part(c, tex, x, by + 8 * s + armA, 44, 20, 4, 12, s);
+                      part(c, tex, x + 12 * s, by + 8 * s - armA, 36, 52, 4, 12, s);
+                      part(c, tex, x + 4 * s, by + 20 * s + legA, 4, 20, 4, 12, s);
+                      part(c, tex, x + 8 * s, by + 20 * s - legA, 20, 52, 4, 12, s);
+                  }
+
+                  @Override
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      float t = (System.currentTimeMillis() - start) / 1000f;
+                      int w = this.width;
+                      int h = this.height;
+                      float fade = Math.min(1f, t / 1.2f);
+
+                      c.fill(0, 0, w, h, 0xFF16181D);
+                      for (int i = 0; i < 50; i++) {
+                          int sx = (int) ((i * 7919L) % Math.max(1, w));
+                          int sy = (int) ((i * 104729L) % Math.max(1, (int) (h * 0.9)));
+                          int a = (int) (50 + 40 * Math.sin(t * 2 + i));
+                          c.fill(sx, sy, sx + 1, sy + 1, ((a & 0xFF) << 24) | 0xFFFFFF);
+                      }
+                      for (int k = 0; k < 3; k++) {
+                          for (int x = 0; x < w; x += 6) {
+                              int y = (int) (h * (0.35 + 0.12 * k) + Math.sin(x * 0.012 + t * 0.8 + k) * h * 0.05);
+                              c.fill(x, y, x + 2, y + 2, 0x22FFFFFF);
+                          }
+                      }
+
+                      int cx = w / 2;
+                      int lw = Math.min(110, h / 4);
+                      int ly = (int) (h * 0.28) - lw / 2;
+                      c.drawTexture(RenderPipelines.GUI_TEXTURED, LOGO, cx - lw / 2, ly, 0, 0, lw, lw, 256, 256);
+                      int ta = ((int) (fade * 255) & 0xFF) << 24;
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Peak Client"), cx, ly + lw + 8, ta | 0xFFFFFF);
+                      float pulse = 0.5f + 0.5f * (float) Math.sin(t * 3f);
+                      int pa = ((int) (fade * pulse * 200) & 0xFF) << 24;
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Press to enter"), cx, ly + lw + 22, pa | 0xFFFFFF);
+
+                      sprite(c, (int) ((t * 70f) % (w + 60)) - 30, (int) (h * 0.78f), t);
+
+                      int overlay = ((int) ((1f - fade) * 255) & 0xFF) << 24;
+                      if (overlay != 0) {
+                          c.fill(0, 0, w, h, overlay);
+                      }
+                      super.render(c, mx, my, delta);
+                  }
+
+                  @Override
+                  public boolean shouldPause() {
+                      return false;
+                  }
+              }
+
+              public static final class AccountScreen extends Screen {
+                  private static final int PER = 6;
+                  private final Screen parent;
+                  private TextFieldWidget field;
+                  private String filter = "";
+                  private String status = "";
+                  private int accPage = 0;
+                  private int cardX;
+                  private int cardY;
+                  private int cardW;
+                  private int cardH;
+
+                  public AccountScreen(Screen parent) {
+                      super(Text.literal("Akun"));
+                      this.parent = parent;
+                  }
+
+                  private void btn(int x, int y, int w, int h, Runnable r) {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), btn -> r.run()).dimensions(x, y, w, h).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
+                  }
+
+                  private List<String> filtered() {
+                      String f = filter == null ? "" : filter.toLowerCase();
+                      List<String> r = new ArrayList<>();
+                      for (String a : Config.get().accounts) {
+                          if (f.isEmpty() || a.toLowerCase().contains(f)) {
+                              r.add(a);
+                          }
+                      }
+                      return r;
+                  }
+
+                  @Override
+                  protected void init() {
+                      cardW = Math.min(260, this.width - 24);
+                      cardH = 250;
+                      cardX = (this.width - cardW) / 2;
+                      cardY = Math.max(30, (this.height - cardH) / 2 - 6);
+                      int x = cardX + 10;
+                      int w = cardW - 20;
+
+                      field = new TextFieldWidget(this.textRenderer, x, cardY + 34, w - 62, 20, Text.literal("Nama"));
+                      field.setMaxLength(16);
+                      field.setPlaceholder(Text.literal("Ketik nama"));
+                      field.setText(filter);
+                      field.setChangedListener(t -> {
+                          filter = t;
+                          accPage = 0;
+                          this.clearAndInit();
+                      });
+                      this.addDrawableChild(field);
+                      btn(x + w - 58, cardY + 34, 58, 20, this::addAccount);
+
+                      List<String> list = filtered();
+                      int pages = Math.max(1, (list.size() + PER - 1) / PER);
+                      accPage = Math.max(0, Math.min(accPage, pages - 1));
+                      for (int i = 0; i < PER; i++) {
+                          int idx = accPage * PER + i;
+                          if (idx >= list.size()) {
+                              break;
+                          }
+                          String name = list.get(idx);
+                          int y = cardY + 64 + i * 22;
+                          btn(x, y, w - 26, 20, () -> select(name));
+                          btn(x + w - 22, y, 22, 20, () -> delete(name));
+                      }
+                      int ny = cardY + cardH - 56;
+                      btn(x, ny, 40, 20, () -> {
+                          if (accPage > 0) {
+                              accPage--;
+                              this.clearAndInit();
+                          }
+                      });
+                      btn(x + w - 40, ny, 40, 20, () -> {
+                          if (accPage < pages - 1) {
+                              accPage++;
+                              this.clearAndInit();
+                          }
+                      });
+                      btn(x, cardY + cardH - 28, w, 20, this::close);
+                  }
+
+                  private void addAccount() {
+                      String n = field.getText().trim();
+                      List<String> acc = Config.get().accounts;
+                      if (!Accounts.valid(n)) {
+                          status = "Nama: 1-16 karakter (huruf, angka, _)";
+                          return;
+                      }
+                      if (acc.size() >= 500) {
+                          status = "Maksimal 500 akun";
+                          return;
+                      }
+                      for (String a : acc) {
+                          if (a.equalsIgnoreCase(n)) {
+                              status = "Akun sudah ada";
+                              return;
+                          }
+                      }
+                      acc.add(n);
+                      Config.save();
+                      status = "Ditambahkan: " + n;
+                      filter = "";
+                      this.clearAndInit();
+                  }
+
+                  private void delete(String name) {
+                      Config.get().accounts.remove(name);
+                      Config.save();
+                      status = "Dihapus: " + name;
+                      this.clearAndInit();
+                  }
+
+                  private void select(String name) {
+                      try {
+                          Accounts.switchTo(name);
+                          this.close();
+                      } catch (Throwable t) {
+                          status = "Gagal: " + t.getMessage();
+                      }
+                  }
+
+                  @Override
+                  public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
+                  }
+
+                  @Override
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      c.fill(0, 0, this.width, this.height, 0x66000000);
+                      GlassKit.card(c, this.textRenderer, cardX, cardY, cardW, cardH, "Akun", GlassKit.BLUE);
+                      int x = cardX + 10;
+                      int w = cardW - 20;
+                      List<String> list = filtered();
+                      int pages = Math.max(1, (list.size() + PER - 1) / PER);
+                      String cur = Accounts.currentName();
+                      for (int i = 0; i < PER; i++) {
+                          int idx = accPage * PER + i;
+                          if (idx >= list.size()) {
+                              break;
+                          }
+                          String name = list.get(idx);
+                          int y = cardY + 64 + i * 22;
+                          boolean active = name.equals(cur);
+                          GlassKit.box(c, x, y, x + w - 26, y + 20, active ? 0x553B82F6 : 0x22FFFFFF);
+                          c.drawTextWithShadow(this.textRenderer, Text.literal((active ? "> " : "") + name), x + 6, y + 6, 0xFFFFFFFF);
+                          GlassKit.box(c, x + w - 22, y, x + w, y + 20, 0x33FF5555);
+                          c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("X"), x + w - 11, y + 6, 0xFFFFFFFF);
+                      }
+                      int ny = cardY + cardH - 56;
+                      c.drawTextWithShadow(this.textRenderer, Text.literal("Tambah"), x + w - 58 + 12, cardY + 40, 0x00FFFFFF);
+                      GlassKit.box(c, x + w - 58, cardY + 34, x + w, cardY + 54, GlassKit.BLUE);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Tambah"), x + w - 29, cardY + 40, 0xFFFFFFFF);
+                      GlassKit.box(c, x, ny, x + 40, ny + 20, 0x33FFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("<"), x + 20, ny + 6, 0xFFFFFFFF);
+                      GlassKit.box(c, x + w - 40, ny, x + w, ny + 20, 0x33FFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(">"), x + w - 20, ny + 6, 0xFFFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer,
+                              Text.literal((accPage + 1) + "/" + pages + "  |  " + Config.get().accounts.size() + "/500"),
+                              x + w / 2, ny + 6, 0xFFBFC5CE);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(status), this.width / 2, cardY + cardH + 8, 0xFFAAAAAA);
+                      GlassKit.row(c, this.textRenderer, x, cardY + cardH - 28, w, 20, "< Kembali",
+                              GlassKit.hov(mx, my, x, cardY + cardH - 28, w, 20));
+                      super.render(c, mx, my, delta);
+                  }
+
+                  @Override
+                  public boolean shouldPause() {
+                      return false;
+                  }
+
+                  @Override
+                  public void close() {
+                      if (this.client != null) {
+                          this.client.setScreen(this.parent);
+                      }
+                  }
+              }
+
+              // ------------------------------------------------------------------
               // Slider opacity (0 - 100 %)
               // ------------------------------------------------------------------
               private static final class OpacitySlider extends SliderWidget {
@@ -4141,6 +4259,8 @@ jobs:
               }
           }
           TS_EOF_8
+          mkdir -p src/main/resources/assets/transparentskin/textures/gui
+          echo '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' | base64 -d > src/main/resources/assets/transparentskin/textures/gui/logo.png
 
       - name: Build
         run: gradle build --no-daemon
