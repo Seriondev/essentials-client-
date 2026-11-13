@@ -1108,232 +1108,342 @@ jobs:
               // ------------------------------------------------------------------
               // GUI
               // ------------------------------------------------------------------
+              /** slider bergaya kaca: tetap slider (bisa digeser), tampilan digambar ulang */
+              private static final class GlassSlider extends SliderWidget {
+                  private final String label;
+                  private final int min;
+                  private final int max;
+                  private final IntConsumer setter;
+
+                  GlassSlider(int x, int y, int w, int h, String label, int min, int max, int cur, IntConsumer setter) {
+                      super(x, y, w, h, Text.empty(), (cur - min) / (double) (max - min));
+                      this.label = label;
+                      this.min = min;
+                      this.max = max;
+                      this.setter = setter;
+                  }
+
+                  private int current() {
+                      return this.min + (int) Math.round(this.value * (this.max - this.min));
+                  }
+
+                  @Override
+                  protected void updateMessage() {
+                      this.setMessage(Text.empty());
+                  }
+
+                  @Override
+                  protected void applyValue() {
+                      if (this.setter != null) {
+                          this.setter.accept(current());
+                      }
+                  }
+
+                  @Override
+                  protected void renderWidget(DrawContext c, int mouseX, int mouseY, float delta) {
+                      int x = this.getX();
+                      int y = this.getY();
+                      int w = this.getWidth();
+                      int h = this.getHeight();
+                      boolean hover = mouseX >= x && mouseX < x + w && mouseY >= y && mouseY < y + h;
+                      if (hover) {
+                          ConfigScreen.rr(c, x, y, w, h, 5, 0x26FFFFFF);
+                      }
+                      String val = String.valueOf(current());
+                      c.drawTextWithShadow(MinecraftClient.getInstance().textRenderer,
+                              Text.literal(label), x + 6, y + (h - 8) / 2, 0xFFE6E8EB);
+                      int vw = MinecraftClient.getInstance().textRenderer.getWidth(val);
+                      c.drawTextWithShadow(MinecraftClient.getInstance().textRenderer,
+                              Text.literal(val), x + w - 8 - vw, y + (h - 8) / 2, 0xFFBFC5CE);
+                      int tx = x + 6;
+                      int tw = w - 12;
+                      int ty = y + h - 4;
+                      ConfigScreen.rr(c, tx, ty, tw, 3, 1, OFF_TRACK);
+                      int fill = (int) Math.round(tw * this.value);
+                      if (fill > 0) {
+                          ConfigScreen.rr(c, tx, ty, Math.max(3, fill), 3, 1, BLUE_TRACK);
+                      }
+                      int kx = tx + fill - 4;
+                      ConfigScreen.rr(c, kx, ty - 3, 8, 8, 4, 0xFFFFFFFF);
+                  }
+
+                  private static final int OFF_TRACK = 0x33FFFFFF;
+                  private static final int BLUE_TRACK = 0xFF3B82F6;
+              }
+
               public static final class ConfigScreen extends Screen {
+                  private static final int BLUE = 0xFF3B82F6;
+                  private static final int OFF = 0xFF3A3F47;
+                  private static final int CARD = 0xD0101418;
                   private static final String[] BASE_NAMES = {"Kepala", "Badan", "Tangan kanan", "Tangan kiri", "Kaki kanan", "Kaki kiri"};
                   private static final String[] OUTER_NAMES = {"Hat", "Jacket", "Lengan kanan", "Lengan kiri", "Celana kanan", "Celana kiri"};
 
                   private final Screen parent;
-                  private int page = 0; // 0 utama, 1 bagian tubuh, 2 cosmetic
                   private int cosPage = 0;
-                  private int headerY = 20;
-                  private int leftCenterX = 0;
-                  private int rightCenterX = 0;
+                  private int cardsY;
+                  private int cardsH;
+                  private int cw;
+                  private int gap = 10;
+                  private int x0;
 
                   public ConfigScreen(Screen parent) {
-                      super(Text.literal("Skin Transparan"));
+                      super(Text.literal("Setting Mod"));
                       this.parent = parent;
                   }
 
                   public ConfigScreen(Screen parent, int startPage) {
                       this(parent);
-                      this.page = startPage;
+                  }
+
+                  private int cardX(int i) {
+                      return x0 + i * (cw + gap);
+                  }
+
+                  private void button(int x, int y, int w, int h, Runnable r) {
+                      ButtonWidget b = ButtonWidget.builder(Text.empty(), btn -> r.run()).dimensions(x, y, w, h).build();
+                      b.setAlpha(0f);
+                      this.addDrawableChild(b);
+                  }
+
+                  private static int clamp(int v, int lo, int hi) {
+                      return Math.max(lo, Math.min(hi, v));
                   }
 
                   @Override
                   protected void init() {
-                      if (page == 0) {
-                          initMain();
-                      } else if (page == 1) {
-                          initParts();
-                      } else if (page == 3) {
-                          initPreview();
-                      } else {
-                          initCosmetics();
-                      }
-                  }
-
-                  private void initMain() {
+                      cw = Math.min(200, (this.width - 40 - gap * 3) / 4);
+                      x0 = (this.width - (cw * 4 + gap * 3)) / 2;
+                      cardsH = Math.min(this.height - 70, 330);
+                      cardsY = Math.max(30, (this.height - cardsH) / 2 - 4);
                       Config c = Config.get();
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      int y = Math.max(28, (this.height - 170) / 2);
 
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Skin transparan: " + (c.enabled ? "ON" : "OFF")),
-                              b -> {
-                                  c.enabled = !c.enabled;
-                                  b.setMessage(Text.literal("Skin transparan: " + (c.enabled ? "ON" : "OFF")));
-                              }).dimensions(x, y, w, 20).build());
+                      // Kartu 0: Umum
+                      int cx = cardX(0);
+                      int y = cardsY + 32;
+                      button(cx, y, cw, 20, () -> {
+                          c.enabled = !c.enabled;
+                          Config.save();
+                      });
+                      button(cx, y + 22, cw, 20, () -> {
+                          c.everyone = !c.everyone;
+                          Config.save();
+                      });
+                      this.addDrawableChild(new GlassSlider(cx, y + 44, cw, 20, "Opacity base", 0, 100, c.baseOpacity,
+                              v -> c.baseOpacity = v));
+                      this.addDrawableChild(new GlassSlider(cx, y + 66, cw, 20, "Opacity outer", 0, 100, c.outerOpacity,
+                              v -> c.outerOpacity = v));
 
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Berlaku untuk: " + (c.everyone ? "Semua pemain" : "Diri sendiri")),
-                              b -> {
-                                  c.everyone = !c.everyone;
-                                  b.setMessage(Text.literal("Berlaku untuk: " + (c.everyone ? "Semua pemain" : "Diri sendiri")));
-                              }).dimensions(x, y + 24, w, 20).build());
-
-                      this.addDrawableChild(new OpacitySlider(x, y + 48, w, 20, "Opacity base layer", c.baseOpacity, v -> c.baseOpacity = v));
-                      this.addDrawableChild(new OpacitySlider(x, y + 72, w, 20, "Opacity outer layer", c.outerOpacity, v -> c.outerOpacity = v));
-
-                      int tw = (w - 8) / 3;
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Tubuh >"), b -> {
-                          page = 1;
-                          this.clearAndInit();
-                      }).dimensions(x, y + 96, tw, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Cosmetic >"), b -> {
-                          page = 2;
-                          this.clearAndInit();
-                      }).dimensions(x + tw + 4, y + 96, tw, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Preview >"), b -> {
-                          page = 3;
-                          this.clearAndInit();
-                      }).dimensions(x + 2 * (tw + 4), y + 96, tw, 20).build());
-
-                      int hw = (w - 4) / 2;
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Killstreak >"),
-                              b -> this.client.setScreen(new KillStreakScreen(this))).dimensions(x, y + 124, hw, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Hitsound >"),
-                              b -> this.client.setScreen(new HitSoundScreen(this))).dimensions(x + hw + 4, y + 124, hw, 20).build());
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Selesai"), b -> this.close())
-                              .dimensions(x, y + 148, w, 20).build());
-                  }
-
-                  private void initParts() {
-                      Config c = Config.get();
-                      int gap = 10;
-                      int cw = Math.min(150, (this.width - 30) / 2);
-                      int lx = this.width / 2 - gap / 2 - cw;
-                      int rx = this.width / 2 + gap / 2;
-                      int y = Math.max(34, (this.height - 176) / 2 + 6);
-
-                      this.headerY = y - 12;
-                      this.leftCenterX = lx + cw / 2;
-                      this.rightCenterX = rx + cw / 2;
-
-                      for (int i = 0; i < 6; i++) {
-                          addPartButton(lx, y + i * 22, cw, BASE_NAMES[i], c.hideBase, i);
-                          addPartButton(rx, y + i * 22, cw, OUTER_NAMES[i], c.hideOuter, i);
+                      // Kartu 1: Tubuh (12 bagian)
+                      cx = cardX(1);
+                      y = cardsY + 32;
+                      for (int i = 0; i < 12; i++) {
+                          final int idx = i;
+                          int ry = y + i * 18;
+                          button(cx, ry, cw, 17, () -> {
+                              if (idx < 6) {
+                                  c.hideBase[idx] = !c.hideBase[idx];
+                              } else {
+                                  c.hideOuter[idx - 6] = !c.hideOuter[idx - 6];
+                              }
+                              Config.save();
+                          });
                       }
 
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> {
-                          page = 0;
-                          this.clearAndInit();
-                      }).dimensions(x, y + 6 * 22 + 4, w, 20).build());
-                  }
-
-                  private void addPartButton(int x, int y, int w, String name, boolean[] hideArray, int index) {
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal(partLabel(name, hideArray[index])),
-                              b -> {
-                                  hideArray[index] = !hideArray[index];
-                                  b.setMessage(Text.literal(partLabel(name, hideArray[index])));
-                              }).dimensions(x, y, w, 20).build());
-                  }
-
-                  private void initPreview() {
-                      Config c = Config.get();
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      int y = Math.max(34, (this.height - 100) / 2);
-
-                      this.addDrawableChild(new RangeSlider(x, y, w, 20, "Posisi X", 0, 100, c.previewX, v -> c.previewX = v));
-                      this.addDrawableChild(new RangeSlider(x, y + 24, w, 20, "Posisi Y", 0, 100, c.previewY, v -> c.previewY = v));
-                      this.addDrawableChild(new RangeSlider(x, y + 48, w, 20, "Ukuran", 50, 150, c.previewSize, v -> c.previewSize = v));
-
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> {
-                          page = 0;
-                          this.clearAndInit();
-                      }).dimensions(x, y + 76, w, 20).build());
-                  }
-
-                  private static String partLabel(String name, boolean hidden) {
-                      return name + ": " + (hidden ? "Hilang" : "Tampil");
-                  }
-
-                  private static String cosLabel(Cosmetics.Loaded l) {
-                      return l.display + " (" + Cosmetics.SLOT_LABELS[l.slot] + "): " + (Cosmetics.isSelected(l) ? "ON" : "OFF");
-                  }
-
-                  private void initCosmetics() {
-                      Config c = Config.get();
-                      int w = Math.min(210, this.width - 20);
-                      int x = (this.width - w) / 2;
-                      int y = Math.max(34, (this.height - 190) / 2 + 8);
-                      this.headerY = y;
-
+                      // Kartu 2: Cosmetic
+                      cx = cardX(2);
+                      y = cardsY + 32;
+                      button(cx, y, cw, 20, () -> {
+                          c.cosmeticHideOriginal = !c.cosmeticHideOriginal;
+                          Cosmetics.recompute();
+                          Config.save();
+                      });
                       List<Cosmetics.Loaded> all = Cosmetics.ALL;
-                      int perPage = 5;
-                      int pages = Math.max(1, (all.size() + perPage - 1) / perPage);
-                      if (cosPage >= pages) {
-                          cosPage = pages - 1;
-                      }
-                      for (int i = 0; i < perPage; i++) {
-                          int idx = cosPage * perPage + i;
+                      int per = 8;
+                      int pages = Math.max(1, (all.size() + per - 1) / per);
+                      cosPage = clamp(cosPage, 0, pages - 1);
+                      for (int i = 0; i < per; i++) {
+                          int idx = cosPage * per + i;
                           if (idx >= all.size()) {
                               break;
                           }
-                          Cosmetics.Loaded l = all.get(idx);
-                          this.addDrawableChild(ButtonWidget.builder(Text.literal(cosLabel(l)), b -> {
-                              Cosmetics.toggle(l);
-                              b.setMessage(Text.literal(cosLabel(l)));
-                          }).dimensions(x, y + i * 22, w, 20).build());
+                          final Cosmetics.Loaded l = all.get(idx);
+                          button(cx, y + 22 + i * 22, cw, 20, () -> Cosmetics.toggle(l));
                       }
-
-                      int ny = y + perPage * 22;
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("<"), b -> {
+                      int navY = y + 22 + per * 22;
+                      button(cx, navY, cw / 2 - 2, 20, () -> {
                           if (cosPage > 0) {
                               cosPage--;
                               this.clearAndInit();
                           }
-                      }).dimensions(x, ny, 24, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("Muat ulang folder"), b -> {
+                      });
+                      button(cx + cw / 2 + 2, navY, cw / 2 - 2, 20, () -> {
+                          if (cosPage < pages - 1) {
+                              cosPage++;
+                              this.clearAndInit();
+                          }
+                      });
+                      button(cx, navY + 22, cw, 20, () -> {
                           Cosmetics.reload();
                           cosPage = 0;
                           this.clearAndInit();
-                      }).dimensions(x + 28, ny, w - 56, 20).build());
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal(">"), b -> {
-                          cosPage++;
-                          this.clearAndInit();
-                      }).dimensions(x + w - 24, ny, 24, 20).build());
+                      });
 
-                      this.addDrawableChild(ButtonWidget.builder(
-                              Text.literal("Sembunyikan bagian asli: " + (c.cosmeticHideOriginal ? "ON" : "OFF")),
-                              b -> {
-                                  c.cosmeticHideOriginal = !c.cosmeticHideOriginal;
-                                  Cosmetics.recompute();
-                                  b.setMessage(Text.literal("Sembunyikan bagian asli: " + (c.cosmeticHideOriginal ? "ON" : "OFF")));
-                              }).dimensions(x, ny + 22, w, 20).build());
+                      // Kartu 3: Preview & fitur
+                      cx = cardX(3);
+                      y = cardsY + 32;
+                      this.addDrawableChild(new GlassSlider(cx, y, cw, 20, "Posisi X", 0, 100, c.previewX,
+                              v -> c.previewX = v));
+                      this.addDrawableChild(new GlassSlider(cx, y + 22, cw, 20, "Posisi Y", 0, 100, c.previewY,
+                              v -> c.previewY = v));
+                      this.addDrawableChild(new GlassSlider(cx, y + 44, cw, 20, "Ukuran", 50, 150, c.previewSize,
+                              v -> c.previewSize = v));
+                      button(cx, y + 66, cw, 20, () -> this.client.setScreen(new KillStreakScreen(this)));
+                      button(cx, y + 88, cw, 20, () -> this.client.setScreen(new HitSoundScreen(this)));
+                      button(cx, y + 110, cw, 20, () -> this.client.setScreen(new MusicScreen(this)));
+                      button(cx, y + 132, cw, 20, () -> this.client.setScreen(new ScreenshotScreen(this)));
 
-                      this.addDrawableChild(ButtonWidget.builder(Text.literal("< Kembali"), b -> {
-                          page = 0;
-                          this.clearAndInit();
-                      }).dimensions(x, ny + 44, w, 20).build());
+                      // Footer
+                      int fy = Math.min(this.height - 22, cardsY + cardsH + 10);
+                      button(this.width / 2 - 60, fy, 120, 20, this::close);
+                  }
+
+                  // ---- gaya kaca: latar gelap semi-transparan dengan sudut membulat ----
+                  private static void rr(DrawContext c, int x, int y, int w, int h, int r, int col) {
+                      if (w <= 0 || h <= 0) {
+                          return;
+                      }
+                      r = Math.min(r, Math.min(w, h) / 2);
+                      for (int i = 0; i < h; i++) {
+                          int inset = 0;
+                          if (r > 0 && i < r) {
+                              double d = r - i - 0.5;
+                              inset = r - (int) Math.round(Math.sqrt(Math.max(0, r * r - d * d)));
+                          } else if (r > 0 && i >= h - r) {
+                              double d = r - (h - 1 - i) - 0.5;
+                              inset = r - (int) Math.round(Math.sqrt(Math.max(0, r * r - d * d)));
+                          }
+                          c.fill(x + inset, y + i, x + w - inset, y + i + 1, col);
+                      }
+                  }
+
+                  private static boolean hov(int mx, int my, int x, int y, int w, int h) {
+                      return mx >= x && mx < x + w && my >= y && my < y + h;
+                  }
+
+                  private void card(DrawContext c, int x, String title, int accent) {
+                      rr(c, x, cardsY, cw, cardsH, 10, CARD);
+                      c.fill(x + 10, cardsY + 1, x + cw - 10, cardsY + 2, 0x55FFFFFF);
+                      rr(c, x + 10, cardsY + 10, 6, 6, 3, accent);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(title), x + 22, cardsY + 9, 0xFFFFFFFF);
+                      c.fill(x + 10, cardsY + 26, x + cw - 10, cardsY + 27, 0x22FFFFFF);
+                  }
+
+                  private void row(DrawContext c, int x, int y, int w, int h, String label, boolean hover) {
+                      if (hover) {
+                          rr(c, x, y, w, h, 5, 0x26FFFFFF);
+                      }
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(label), x + 6, y + (h - 8) / 2, 0xFFE6E8EB);
+                  }
+
+                  private void toggleRow(DrawContext c, int mx, int my, int x, int y, int w, int h, String label, boolean on) {
+                      row(c, x, y, w, h, label, hov(mx, my, x, y, w, h));
+                      int pw = 24;
+                      int ph = 11;
+                      int px = x + w - pw - 6;
+                      int py = y + (h - ph) / 2;
+                      rr(c, px, py, pw, ph, 5, on ? BLUE : OFF);
+                      int kx = on ? px + pw - ph + 1 : px + 1;
+                      rr(c, kx, py + 1, ph - 2, ph - 2, 4, 0xFFFFFFFF);
+                  }
+
+                  private void stepperRow(DrawContext c, int mx, int my, int x, int y, int w, int h, String label, String value) {
+                      row(c, x, y, w, h, label, false);
+                      int vw = this.textRenderer.getWidth(value);
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(value), x + w - 48 - vw, y + (h - 8) / 2, 0xFFBFC5CE);
+                      boolean hm = hov(mx, my, x + w - 46, y, 15, h);
+                      boolean hp = hov(mx, my, x + w - 17, y, 17, h);
+                      rr(c, x + w - 44, y + 3, 12, h - 6, 3, hm ? 0x55FFFFFF : 0x2AFFFFFF);
+                      rr(c, x + w - 14, y + 3, 12, h - 6, 3, hp ? 0x55FFFFFF : 0x2AFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("-"), x + w - 38, y + (h - 8) / 2, 0xFFFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("+"), x + w - 8, y + (h - 8) / 2, 0xFFFFFFFF);
+                  }
+
+                  private void actionRow(DrawContext c, int mx, int my, int x, int y, int w, int h, String label) {
+                      row(c, x, y, w, h, label, hov(mx, my, x, y, w, h));
+                      c.drawTextWithShadow(this.textRenderer, Text.literal(">"), x + w - 12, y + (h - 8) / 2, 0xFF8FB8FF);
                   }
 
                   @Override
                   public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
-                      // sengaja kosong: dunia tetap kelihatan jelas (tekan F5 untuk lihat karakter sendiri)
                   }
 
                   @Override
-                  public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-                      super.render(context, mouseX, mouseY, delta);
-                      context.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, 10, 0xFFFFFFFF);
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      c.fill(0, 0, this.width, this.height, 0x66000000);
+                      c.drawCenteredTextWithShadow(this.textRenderer, this.title, this.width / 2, Math.max(4, cardsY - 16), 0xFFFFFFFF);
+                      Config cfg = Config.get();
 
-                      if (page == 1) {
-                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Base layer"), leftCenterX, headerY, 0xFFFFFFFF);
-                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Outer layer"), rightCenterX, headerY, 0xFFFFFFFF);
-                      } else if (page == 2) {
-                          if (Cosmetics.ALL.isEmpty()) {
-                              context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Belum ada cosmetic. Taruh file .bbmodel di:"), this.width / 2, headerY + 8, 0xFFFFFFFF);
-                              context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("config/transparent-skin/cosmetics"), this.width / 2, headerY + 22, 0xFFFFFF55);
-                              context.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Nama file: rightleg_korblox.bbmodel"), this.width / 2, headerY + 36, 0xFFAAAAAA);
-                          }
-                          String err = Cosmetics.error;
-                          if (!err.isEmpty()) {
-                              if (err.length() > 70) {
-                                  err = err.substring(0, 70);
-                              }
-                              context.drawCenteredTextWithShadow(this.textRenderer, Text.literal(err), this.width / 2, this.height - 12, 0xFFFF5555);
-                          }
-                      } else if (page == 0) {
-                          String status = "Hook: model " + (State.angleHits > 0 ? "OK" : "-") + ", part " + (State.partHits > 0 ? "OK" : "-")
-                                  + " | cosmetic: " + Cosmetics.ALL.size();
-                          context.drawCenteredTextWithShadow(this.textRenderer, Text.literal(status), this.width / 2, this.height - 12, 0xFFAAAAAA);
+                      // Kartu 0: Umum
+                      int x = cardX(0);
+                      int y = cardsY + 32;
+                      card(c, x, "Umum", BLUE);
+                      toggleRow(c, mx, my, x, y, cw, 20, "Skin transparan", cfg.enabled);
+                      toggleRow(c, mx, my, x, y + 22, cw, 20, "Berlaku semua", cfg.everyone);
+
+                      // Kartu 1: Tubuh
+                      x = cardX(1);
+                      y = cardsY + 32;
+                      card(c, x, "Tubuh", 0xFF22C55E);
+                      for (int i = 0; i < 12; i++) {
+                          boolean outer = i >= 6;
+                          String name = outer ? OUTER_NAMES[i - 6] : BASE_NAMES[i];
+                          boolean hidden = outer ? cfg.hideOuter[i - 6] : cfg.hideBase[i];
+                          toggleRow(c, mx, my, x, y + i * 18, cw, 17, (outer ? "Outer " : "") + name, !hidden);
                       }
+
+                      // Kartu 2: Cosmetic
+                      x = cardX(2);
+                      y = cardsY + 32;
+                      card(c, x, "Cosmetic", 0xFFA855F7);
+                      toggleRow(c, mx, my, x, y, cw, 20, "Sembunyikan asli", cfg.cosmeticHideOriginal);
+                      List<Cosmetics.Loaded> all = Cosmetics.ALL;
+                      int per = 8;
+                      int pages = Math.max(1, (all.size() + per - 1) / per);
+                      for (int i = 0; i < per; i++) {
+                          int idx = cosPage * per + i;
+                          if (idx >= all.size()) {
+                              break;
+                          }
+                          Cosmetics.Loaded l = all.get(idx);
+                          String label = l.display.length() > 15 ? l.display.substring(0, 14) + "." : l.display;
+                          toggleRow(c, mx, my, x, y + 22 + i * 22, cw, 20, label, Cosmetics.isSelected(l));
+                      }
+                      int navY = y + 22 + per * 22;
+                      boolean hl = hov(mx, my, x, navY, cw / 2 - 2, 20);
+                      boolean hr = hov(mx, my, x + cw / 2 + 2, navY, cw / 2 - 2, 20);
+                      rr(c, x, navY, cw / 2 - 2, 20, 5, hl ? 0x44FFFFFF : 0x22FFFFFF);
+                      rr(c, x + cw / 2 + 2, navY, cw / 2 - 2, 20, 5, hr ? 0x44FFFFFF : 0x22FFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("<"), x + cw / 4 - 1, navY + 6, 0xFFFFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal((cosPage + 1) + "/" + pages), x + cw / 2, navY + 6, 0xFFBFC5CE);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal(">"), x + cw * 3 / 4 + 1, navY + 6, 0xFFFFFFFF);
+                      actionRow(c, mx, my, x, navY + 22, cw, 20, "Muat ulang folder");
+
+                      // Kartu 3: Preview & fitur
+                      x = cardX(3);
+                      y = cardsY + 32;
+                      card(c, x, "Preview & fitur", 0xFFF59E0B);
+                      actionRow(c, mx, my, x, y + 66, cw, 20, "Killstreak");
+                      actionRow(c, mx, my, x, y + 88, cw, 20, "Hitsound");
+                      actionRow(c, mx, my, x, y + 110, cw, 20, "Musik");
+                      actionRow(c, mx, my, x, y + 132, cw, 20, "Foto");
+
+                      // Footer
+                      int fy = Math.min(this.height - 22, cardsY + cardsH + 10);
+                      boolean hf = hov(mx, my, this.width / 2 - 60, fy, 120, 20);
+                      rr(c, this.width / 2 - 60, fy, 120, 20, 6, hf ? 0x553B82F6 : 0x33FFFFFF);
+                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Selesai"), this.width / 2, fy + 6, 0xFFFFFFFF);
+
+                      super.render(c, mx, my, delta);
                   }
 
                   @Override
@@ -1343,21 +1453,13 @@ jobs:
 
                   @Override
                   public void close() {
+                      Config.save();
                       if (this.client != null) {
                           this.client.setScreen(this.parent);
                       }
                   }
-
-                  @Override
-                  public void removed() {
-                      Config.save();
-                      super.removed();
-                  }
               }
 
-              // ------------------------------------------------------------------
-              // Akun offline (ganti nama/session lokal, sampai 500 akun)
-              // ------------------------------------------------------------------
               public static final class Accounts {
                   private Accounts() {
                   }
