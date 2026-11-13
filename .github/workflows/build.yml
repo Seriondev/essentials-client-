@@ -3775,36 +3775,54 @@ jobs:
                       super(false);
                   }
 
-                  public static int logoSize(int screenWidth) {
-                      return Math.max(48, Math.min(150, (int) (screenWidth * 0.22f)));
+                  /** {top, lebar} logo: selalu di atas tombol menu (tombol mulai di sekitar h/4) */
+                  public static int[] layout(int sw, int sh) {
+                      int lw = Math.max(40, Math.min((int) (sh * 0.18f), (int) (sw * 0.16f)));
+                      int top = (int) (sh * 0.04f);
+                      return new int[]{top, lw};
                   }
 
-                  public static void drawLogo(DrawContext c, int screenWidth, int y, float alpha) {
-                      int lw = logoSize(screenWidth);
-                      int cx = screenWidth / 2;
+                  public static void drawLogo(DrawContext c, int sw, float alpha) {
+                      int sh = c.getScaledWindowHeight();
+                      int[] l = layout(sw, sh);
+                      int lw = l[1];
+                      int cx = sw / 2;
                       c.drawTexture(RenderPipelines.GUI_TEXTURED,
                               Identifier.of("transparentskin", "textures/gui/logo.png"),
-                              cx - lw / 2, y, 0, 0, lw, lw, 256, 256);
+                              cx - lw / 2, l[0], 0, 0, lw, lw, 256, 256);
                       int a = ((int) (Math.max(0f, Math.min(1f, alpha)) * 255f) & 0xFF) << 24;
                       c.drawCenteredTextWithShadow(MinecraftClient.getInstance().textRenderer,
-                              Text.literal("Peak Client"), cx, y + lw + 6, a | 0xFFFFFF);
+                              Text.literal("Peak Client"), cx, l[0] + lw + 4, a | 0xFFFFFF);
                   }
 
                   @Override
                   public void draw(DrawContext context, int screenWidth, float alpha) {
-                      drawLogo(context, screenWidth, (int) (context.getScaledWindowHeight() * 0.12f), alpha);
+                      drawLogo(context, screenWidth, alpha);
                   }
 
                   @Override
                   public void draw(DrawContext context, int screenWidth, float alpha, int y) {
-                      drawLogo(context, screenWidth, y, alpha);
+                      drawLogo(context, screenWidth, alpha);
                   }
               }
 
               /** title screen Minecraft dengan logo client */
               public static final class ClientTitleScreen extends TitleScreen {
+                  private final long openAt = System.currentTimeMillis();
+
                   public ClientTitleScreen(boolean doBackgroundFade) {
                       super(doBackgroundFade, new ClientLogoDrawer());
+                  }
+
+                  @Override
+                  public void render(DrawContext c, int mx, int my, float delta) {
+                      super.render(c, mx, my, delta);
+                      float e = (System.currentTimeMillis() - openAt) / 1100f;
+                      if (e < 1f) {
+                          float a = 1f - e;
+                          a = a * a;
+                          c.fill(0, 0, this.width, this.height, ((int) (a * 255f) & 0xFF) << 24);
+                      }
                   }
               }
 
@@ -3856,10 +3874,12 @@ jobs:
                       }
 
                       int cx = w / 2;
-                      int lw0 = Math.min(120, h / 4);
-                      int lwT = ClientLogoDrawer.logoSize(w);
+                      float grow = Math.min(1f, t / 1.0f);
+                      int lw0 = (int) (Math.min(120, h / 4) * (0.6f + 0.4f * grow));
+                      int[] target = ClientLogoDrawer.layout(w, h);
+                      int lwT = target[1];
                       int y0 = (int) (h * 0.40f) - lw0 / 2 + (int) ((1f - fade) * 14f);
-                      int yT = (int) (h * 0.12f);
+                      int yT = target[0];
                       int lw = Math.round(lw0 + (lwT - lw0) * ease);
                       int ly = Math.round(y0 + (yT - y0) * ease);
                       c.drawTexture(RenderPipelines.GUI_TEXTURED, LOGO, cx - lw / 2, ly, 0, 0, lw, lw, 256, 256);
