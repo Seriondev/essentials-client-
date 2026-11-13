@@ -185,6 +185,7 @@ jobs:
           import net.minecraft.client.gl.RenderPipelines;
           import java.util.LinkedHashMap;
           import net.minecraft.client.font.TextRenderer;
+          import net.minecraft.client.gui.LogoDrawer;
           import net.minecraft.client.gui.PlayerSkinDrawer;
           import net.minecraft.client.gui.screen.GameMenuScreen;
           import net.minecraft.client.gui.screen.TitleScreen;
@@ -287,9 +288,13 @@ jobs:
 
                   // GUI dibuka di tick berikutnya, supaya tidak langsung ketutup oleh chat screen
                   ClientTickEvents.END_CLIENT_TICK.register(client -> {
-                      if (!splashShown && client.currentScreen instanceof TitleScreen) {
-                          splashShown = true;
-                          client.setScreen(new PeakSplash());
+                      if (client.currentScreen instanceof TitleScreen && !(client.currentScreen instanceof ClientTitleScreen)) {
+                          if (!splashShown) {
+                              splashShown = true;
+                              client.setScreen(new PeakSplash());
+                          } else {
+                              client.setScreen(new ClientTitleScreen(false));
+                          }
                       }
                       try {
                           HudExtras.tick(client);
@@ -310,16 +315,6 @@ jobs:
                   });
 
                   HudExtras.init();
-                  ScreenEvents.AFTER_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
-                      if (screen instanceof TitleScreen) {
-                          ScreenEvents.afterRender(screen).register((s2, ctx, mx, my, td) -> {
-                              try {
-                                  drawClientLogo(ctx, s2.width, s2.height);
-                              } catch (Throwable ignored) {
-                              }
-                          });
-                      }
-                  });
                   AttackEntityCallback.EVENT.register((player, world, hand, entity, hit) -> {
                       try {
                           MinecraftClient mc = MinecraftClient.getInstance();
@@ -379,20 +374,6 @@ jobs:
                       } catch (Throwable ignored) {
                       }
                   });
-              }
-
-              /** menimpa logo Minecraft di title screen dengan logo + nama client */
-              private static void drawClientLogo(DrawContext c, int w, int h) {
-                  int cx = w / 2;
-                  int top = Math.max(4, h / 14);
-                  int lw = Math.max(36, Math.min(72, h / 6));
-                  int panelW = Math.min(w - 20, lw * 3);
-                  GlassKit.box(c, cx - panelW / 2, Math.max(2, top - 6), cx + panelW / 2, top + lw + 24, 0xE6101418);
-                  c.drawTexture(RenderPipelines.GUI_TEXTURED,
-                          Identifier.of("transparentskin", "textures/gui/logo.png"),
-                          cx - lw / 2, top, 0, 0, lw, lw, 256, 256);
-                  c.drawCenteredTextWithShadow(MinecraftClient.getInstance().textRenderer,
-                          Text.literal("Peak Client"), cx, top + lw + 8, 0xFFFFFFFF);
               }
 
               private static void addWidget(Screen screen, ClickableWidget widget) {
@@ -3788,12 +3769,52 @@ jobs:
                   }
               }
 
+              /** menggantikan logo Minecraft di title screen dengan logo client */
+              public static final class ClientLogoDrawer extends LogoDrawer {
+                  public ClientLogoDrawer() {
+                      super(false);
+                  }
+
+                  public static int logoSize(int screenWidth) {
+                      return Math.max(48, Math.min(150, (int) (screenWidth * 0.22f)));
+                  }
+
+                  public static void drawLogo(DrawContext c, int screenWidth, int y, float alpha) {
+                      int lw = logoSize(screenWidth);
+                      int cx = screenWidth / 2;
+                      c.drawTexture(RenderPipelines.GUI_TEXTURED,
+                              Identifier.of("transparentskin", "textures/gui/logo.png"),
+                              cx - lw / 2, y, 0, 0, lw, lw, 256, 256);
+                      int a = ((int) (Math.max(0f, Math.min(1f, alpha)) * 255f) & 0xFF) << 24;
+                      c.drawCenteredTextWithShadow(MinecraftClient.getInstance().textRenderer,
+                              Text.literal("Peak Client"), cx, y + lw + 6, a | 0xFFFFFF);
+                  }
+
+                  @Override
+                  public void draw(DrawContext context, int screenWidth, float alpha) {
+                      drawLogo(context, screenWidth, (int) (context.getScaledWindowHeight() * 0.12f), alpha);
+                  }
+
+                  @Override
+                  public void draw(DrawContext context, int screenWidth, float alpha, int y) {
+                      drawLogo(context, screenWidth, y, alpha);
+                  }
+              }
+
+              /** title screen Minecraft dengan logo client */
+              public static final class ClientTitleScreen extends TitleScreen {
+                  public ClientTitleScreen(boolean doBackgroundFade) {
+                      super(doBackgroundFade, new ClientLogoDrawer());
+                  }
+              }
+
               // ------------------------------------------------------------------
               // Splash Peak Client: logo, teks, pemain berjalan dari kiri, lalu masuk ke title screen
               // ------------------------------------------------------------------
               public static final class PeakSplash extends Screen {
                   private static final Identifier LOGO = Identifier.of("transparentskin", "textures/gui/logo.png");
                   private final long start = System.currentTimeMillis();
+                  private long leaveAt = -1L;
 
                   public PeakSplash() {
                       super(Text.literal("Peak Client"));
@@ -3807,8 +3828,8 @@ jobs:
                   }
 
                   private void enter() {
-                      if (this.client != null) {
-                          this.client.setScreen(new TitleScreen(false));
+                      if (leaveAt < 0) {
+                          leaveAt = System.currentTimeMillis();
                       }
                   }
 
@@ -3816,43 +3837,46 @@ jobs:
                   public void renderBackground(DrawContext context, int mouseX, int mouseY, float delta) {
                   }
 
-                  private static void part(DrawContext c, Identifier tex, int x, int y, int u, int v, int w, int h, int s) {
-                      c.drawTexture(RenderPipelines.GUI_TEXTURED, tex, x, y, u, v, w * s, h * s, w, h, 64, 64);
-                  }
-
                   @Override
                   public void render(DrawContext c, int mx, int my, float delta) {
-                      float t = (System.currentTimeMillis() - start) / 1000f;
+                      long now = System.currentTimeMillis();
+                      float t = (now - start) / 1000f;
                       int w = this.width;
                       int h = this.height;
                       float fade = Math.min(1f, t / 1.2f);
+                      float leave = leaveAt < 0 ? 0f : Math.min(1f, (now - leaveAt) / 900f);
+                      float ease = leave * leave * (3f - 2f * leave);
 
                       c.fill(0, 0, w, h, 0xFF16181D);
-                      for (int i = 0; i < 50; i++) {
+                      for (int i = 0; i < 30; i++) {
                           int sx = (int) ((i * 7919L) % Math.max(1, w));
                           int sy = (int) ((i * 104729L) % Math.max(1, (int) (h * 0.9)));
                           int a = (int) (50 + 40 * Math.sin(t * 2 + i));
                           c.fill(sx, sy, sx + 1, sy + 1, ((a & 0xFF) << 24) | 0xFFFFFF);
                       }
-                      for (int k = 0; k < 3; k++) {
-                          for (int x = 0; x < w; x += 6) {
-                              int y = (int) (h * (0.35 + 0.12 * k) + Math.sin(x * 0.012 + t * 0.8 + k) * h * 0.05);
-                              c.fill(x, y, x + 2, y + 2, 0x22FFFFFF);
-                          }
-                      }
 
                       int cx = w / 2;
-                      int lw = Math.min(110, h / 4);
-                      int ly = (int) (h * 0.28) - lw / 2;
+                      int lw0 = Math.min(120, h / 4);
+                      int lwT = ClientLogoDrawer.logoSize(w);
+                      int y0 = (int) (h * 0.40f) - lw0 / 2 + (int) ((1f - fade) * 14f);
+                      int yT = (int) (h * 0.12f);
+                      int lw = Math.round(lw0 + (lwT - lw0) * ease);
+                      int ly = Math.round(y0 + (yT - y0) * ease);
                       c.drawTexture(RenderPipelines.GUI_TEXTURED, LOGO, cx - lw / 2, ly, 0, 0, lw, lw, 256, 256);
-                      int ta = ((int) (fade * 255) & 0xFF) << 24;
+
+                      int ta = ((int) (fade * (1f - ease * 0.5f) * 255f) & 0xFF) << 24;
                       c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Peak Client"), cx, ly + lw + 8, ta | 0xFFFFFF);
-                      float pulse = 0.5f + 0.5f * (float) Math.sin(t * 3f);
-                      int pa = ((int) (fade * pulse * 200) & 0xFF) << 24;
-                      c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Press to enter"), cx, ly + lw + 22, pa | 0xFFFFFF);
+                      if (leave <= 0f) {
+                          float pulse = 0.5f + 0.5f * (float) Math.sin(t * 3f);
+                          int pa = ((int) (fade * pulse * 200f) & 0xFF) << 24;
+                          c.drawCenteredTextWithShadow(this.textRenderer, Text.literal("Press to enter"), cx, ly + lw + 22, pa | 0xFFFFFF);
+                      }
 
-
-                      int overlay = ((int) ((1f - fade) * 255) & 0xFF) << 24;
+                      if (leave >= 1f && this.client != null) {
+                          this.client.setScreen(new ClientTitleScreen(false));
+                          return;
+                      }
+                      int overlay = ((int) (ease * ease * 255f) & 0xFF) << 24;
                       if (overlay != 0) {
                           c.fill(0, 0, w, h, overlay);
                       }
@@ -3864,7 +3888,6 @@ jobs:
                       return false;
                   }
               }
-
               public static final class AccountScreen extends Screen {
                   private static final int PER = 6;
                   private final Screen parent;
