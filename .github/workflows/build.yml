@@ -1140,7 +1140,7 @@ jobs:
                   }
 
                   @Override
-                  protected void renderWidget(DrawContext c, int mouseX, int mouseY, float delta) {
+                  public void renderWidget(DrawContext c, int mouseX, int mouseY, float delta) {
                       int x = this.getX();
                       int y = this.getY();
                       int w = this.getWidth();
